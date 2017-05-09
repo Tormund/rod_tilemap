@@ -7,7 +7,7 @@ Tile map support for [rod](https://github.com/yglukhov/rod) game engine
   * [Tiled](http://www.mapeditor.org/), export tilemap as json
 
 ###### WIP: 
-  * support hexagonal maps
+  * hexagonal maps
   * serializarion / deserialization into rod json
   * api for procedural tilemap generation
 
