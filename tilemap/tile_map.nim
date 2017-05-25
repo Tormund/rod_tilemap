@@ -20,7 +20,7 @@ type
         isDirty: bool
 
     ImageMapLayer* = ref object of BaseTileMapLayer
-        image*: SelfContainedImage
+        image*: Image
 
     BaseTileSet = ref object of RootObj
         tileSize: Vector3
@@ -29,11 +29,11 @@ type
         name: string
 
     TileSheet = ref object of BaseTileSet
-        sheet: SelfContainedImage
+        sheet: Image
         columns: int
 
     TileCollection = ref object of BaseTileSet
-        collection: Table[int, SelfContainedImage]
+        collection: Table[int, Image]
 
     TileMapOrientation* {.pure.}= enum
         orthogonal
@@ -273,7 +273,7 @@ proc loadTileSet(jTileSet: JsonNode): BaseTileSet=
         let tileCollection = new(TileCollection)
 
         tileCollection.tilesCount = jTileSet["tilecount"].getNum().int
-        tileCollection.collection = initTable[int, SelfContainedImage]()
+        tileCollection.collection = initTable[int, Image]()
         var tilesFound = 0
         var i = 1
         while tilesFound < tileCollection.tilesCount:
@@ -310,8 +310,8 @@ proc loadTileSet(jTileSet: JsonNode): BaseTileSet=
     echo "TileSet ", result.name, " loaded!"
 
 proc loadTiled*(tm: TileMap, path: string)=
-    let jtm = parseFile(path)
-    pushParentResource(path)
+    let jtm = parseFile(pathForResource(path))
+    pushParentResource(pathForResource(path))
     try:
         if "orientation" in jtm:
             tm.orientation = parseEnum[TileMapOrientation](jtm["orientation"].getStr())
