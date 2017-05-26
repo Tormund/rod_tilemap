@@ -47,6 +47,7 @@ type
         tileSize*: Vector3
         layers: seq[BaseTileMapLayer]
         tileSets: seq[BaseTileSet]
+        batchTextureSize*: Size
         case orientation*: TileMapOrientation
         of TileMapOrientation.staggered:
             isStaggerAxisX: bool
@@ -208,19 +209,25 @@ method drawLayer(layer: TileMapLayer, tm: TileMap)=
 
     if layer.isDirty and layer.enabled:
 
-        # layer.batchImage.draw() do():
-        for pos, tileId in layer.data: # todo iterate only tiles in viewport with some offset
-            if tileId == 0: continue
-            let tr = tm.tileDrawRect(pos)
+        layer.batchImage.draw() do():
+            for pos, tileId in layer.data: # todo iterate only tiles in viewport with some offset
+                if tileId == 0: continue
+                let tr = tm.tileDrawRect(pos)
 
-            for tileSet in tm.tileSets:
-                if tileSet.canDrawTile(tileId):
-                    tileSet.drawTile(tileId, tr, layer.alpha)
-                    break
+                for tileSet in tm.tileSets:
+                    if tileSet.canDrawTile(tileId):
+                        tileSet.drawTile(tileId, tr, layer.alpha)
+                        break
 
-        layer.isDirty = false
+            layer.isDirty = false
 
-    # currentContext().drawImage(layer.batchImage, r)
+        let gl = currentContext().gl
+        gl.bindTexture(gl.TEXTURE_2D, layer.batchImage.texture)
+        gl.generateMipmap(gl.TEXTURE_2D)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST)
+
+    currentContext().drawImage(layer.batchImage, r)
 
     if tm.node.sceneView.editing:
         tm.debugDraw(layer)
@@ -231,11 +238,22 @@ method draw*(tm: TileMap) =
             layer.drawLayer(tm)
 
 method getBBox*(tm: TileMap): BBox =
-    const absMinPoint = newVector3(high(int).Coord/2.0, high(int).Coord/2.0, high(int).Coord/2.0)
-    const absMaxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, low(int).Coord/2.0)
+    result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
+    result.minPoint = newVector3(high(int).Coord/2.0, high(int).Coord/2.0, 0.0)
 
-    result.maxPoint = absMaxPoint
-    result.minPoint = absMinPoint
+    for l in tm.layers:
+        if l of TileMapLayer:
+            let r = tm.layerRect(l.TileMapLayer)
+            if r.x < result.minPoint.x:
+                result.minPoint.x = r.x
+            if r.y < result.minPoint.y:
+                result.minPoint.y = r.y
+            if r.width + r.x > result.maxPoint.x:
+                result.maxPoint.x = r.width + r.x
+            if r.height + r.y > result.maxPoint.y:
+                result.maxPoint.y = r.height + r.y
+
+    echo "getBBox tiledmap ", [result.minPoint, result.maxPoint]
 
 #todo: serialize support
 # method deserialize*(c: TileMap, j: JsonNode, serealizer: Serializer) =
@@ -290,12 +308,15 @@ proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
             let k = $i
             if k in jTileSet["tiles"]:
                 inc tilesFound
+                echo "start load ", i + firstgid, " firstgid ", firstgid
                 closureScope:
                     let tilePath = jTileSet["tiles"][k]["image"].getStr()
+                    let fgid = firstgid
                     let ii = i + firstgid
+
                     deserializeImage(jTileSet["tiles"][k]["image"], serializer) do(img: Image, err: string):
                         tileCollection.collection[ii] = img
-                        echo "register tileid ", ii, " with path ", tilePath
+                        echo "register tileid ", ii, " with path ", tilePath, " ", fgid
             inc i
 
         result = tileCollection
@@ -309,14 +330,6 @@ proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
         tileSheet.columns = jTileSet["columns"].getNum().int
         result = tileSheet
 
-    # elif "source" in jTileSet:
-    #     serializer.startAsyncOp()
-
-
-    #     let jts = parseFile(pathForResource(jTileSet["source"].getStr()))
-    #     result = loadTileSet(jts)
-    #     result.firstGid = jTileSet["firstgid"].getNum().int
-    #     return
     else:
         raise newException(Exception, "Incorrect tileSet format")
 
@@ -358,10 +371,13 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                     closureScope:
                         let url = serializer.toAbsoluteUrl(jts["source"].getStr())
                         serializer.startAsyncOp()
+                        let fg = jts["firstgid"]
+
                         loadAsset(url) do(j: JsonNode, err: string):
                             # todo error
                             let s = new(Serializer)
                             s.url = url
+                            j["firstgid"] = fg
                             s.onComplete = proc() =
                                 serializer.endAsyncOp()
                             let ts = loadTileSet(j, s)
