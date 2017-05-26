@@ -1,10 +1,11 @@
-import rod / [ component, node ]
+import rod / [ component, node, viewport, rod_types ]
 import rod / tools / [ serializer, debug_draw ]
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
                 render_to_image ]
 
 import json, tables, strutils, logging
 import opengl
+import nimx.assets.asset_loading
 
 type
     BaseTileMapLayer = ref object of RootObj
@@ -206,19 +207,20 @@ method drawLayer(layer: TileMapLayer, tm: TileMap)=
         layer.isDirty = true
 
     if layer.isDirty and layer.enabled:
-        layer.batchImage.draw() do():
-            for pos, tileId in layer.data: # todo iterate only tiles in viewport with some offset
-                if tileId == 0: continue
-                let tr = tm.tileDrawRect(pos)
 
-                for tileSet in tm.tileSets:
-                    if tileSet.canDrawTile(tileId):
-                        tileSet.drawTile(tileId, tr, layer.alpha)
-                        break
+        # layer.batchImage.draw() do():
+        for pos, tileId in layer.data: # todo iterate only tiles in viewport with some offset
+            if tileId == 0: continue
+            let tr = tm.tileDrawRect(pos)
 
-            layer.isDirty = false
+            for tileSet in tm.tileSets:
+                if tileSet.canDrawTile(tileId):
+                    tileSet.drawTile(tileId, tr, layer.alpha)
+                    break
 
-    currentContext().drawImage(layer.batchImage, r)
+        layer.isDirty = false
+
+    # currentContext().drawImage(layer.batchImage, r)
 
     if tm.node.sceneView.editing:
         tm.debugDraw(layer)
@@ -227,6 +229,13 @@ method draw*(tm: TileMap) =
     for layer in tm.layers:
         if layer.enabled:
             layer.drawLayer(tm)
+
+method getBBox*(tm: TileMap): BBox =
+    const absMinPoint = newVector3(high(int).Coord/2.0, high(int).Coord/2.0, high(int).Coord/2.0)
+    const absMaxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, low(int).Coord/2.0)
+
+    result.maxPoint = absMaxPoint
+    result.minPoint = absMinPoint
 
 #todo: serialize support
 # method deserialize*(c: TileMap, j: JsonNode, serealizer: Serializer) =
@@ -245,15 +254,16 @@ registerComponent(TileMap, "TileMap")
     Tiled support http://www.mapeditor.org/
  ]#
 
-var tiledLayerCreators = initTable[string, proc(typeName: string, jl: JsonNode): BaseTileMapLayer]()
+var tiledLayerCreators = initTable[string, proc(typeName: string, jl: JsonNode, s: Serializer): BaseTileMapLayer]()
 
-tiledLayerCreators["imagelayer"] = proc(typeName: string, jl: JsonNode): BaseTileMapLayer=
+tiledLayerCreators["imagelayer"] = proc(typeName: string, jl: JsonNode, s: Serializer): BaseTileMapLayer=
     let layer = new(ImageMapLayer)
     if "image" in jl:
-        layer.image = imageWithResource(jl["image"].getStr())
+        deserializeImage(jl["image"], s) do(img: Image, err: string):
+            layer.image = img
     result = layer
 
-tiledLayerCreators["tilelayer"] = proc(typeName: string, jl: JsonNode): BaseTileMapLayer=
+tiledLayerCreators["tilelayer"] = proc(typeName: string, jl: JsonNode, s: Serializer): BaseTileMapLayer=
     let layer = new(TileMapLayer)
     layer.data = @[]
     for jld in jl["data"]:
@@ -263,7 +273,7 @@ tiledLayerCreators["tilelayer"] = proc(typeName: string, jl: JsonNode): BaseTile
 
     result = layer
 
-proc loadTileSet(jTileSet: JsonNode): BaseTileSet=
+proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
     var firstgid = 0
 
     if "firstgid" in jTileSet:
@@ -280,24 +290,33 @@ proc loadTileSet(jTileSet: JsonNode): BaseTileSet=
             let k = $i
             if k in jTileSet["tiles"]:
                 inc tilesFound
-                let tilePath = jTileSet["tiles"][k]["image"].getStr()
-                tileCollection.collection[i + firstgid] = imageWithResource(tilePath)
-                echo "register tileid ", i + firstgid, " with path ", tilePath
+                closureScope:
+                    let tilePath = jTileSet["tiles"][k]["image"].getStr()
+                    let ii = i + firstgid
+                    deserializeImage(jTileSet["tiles"][k]["image"], serializer) do(img: Image, err: string):
+                        tileCollection.collection[ii] = img
+                        echo "register tileid ", ii, " with path ", tilePath
             inc i
 
         result = tileCollection
 
     elif "image" in jTileSet:
         let tileSheet = new(TileSheet)
-        tileSheet.sheet = imageWithResource(jTileSet["image"].getStr())
+        deserializeImage(jTileSet["image"], serializer) do(img: Image, err: string):
+            # TODO: handle error
+            tileSheet.sheet = img
+
         tileSheet.columns = jTileSet["columns"].getNum().int
         result = tileSheet
 
-    elif "source" in jTileSet:
-        let jts = parseFile(pathForResource(jTileSet["source"].getStr()))
-        result = loadTileSet(jts)
-        result.firstGid = jTileSet["firstgid"].getNum().int
-        return
+    # elif "source" in jTileSet:
+    #     serializer.startAsyncOp()
+
+
+    #     let jts = parseFile(pathForResource(jTileSet["source"].getStr()))
+    #     result = loadTileSet(jts)
+    #     result.firstGid = jTileSet["firstgid"].getNum().int
+    #     return
     else:
         raise newException(Exception, "Incorrect tileSet format")
 
@@ -309,10 +328,13 @@ proc loadTileSet(jTileSet: JsonNode): BaseTileSet=
 
     echo "TileSet ", result.name, " loaded!"
 
-proc loadTiled*(tm: TileMap, path: string)=
-    let jtm = parseFile(pathForResource(path))
-    pushParentResource(pathForResource(path))
-    try:
+proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
+    loadAsset(url) do(jtm: JsonNode, err: string):
+        #todo: err
+        let serializer = new(Serializer)
+        serializer.url = url
+        serializer.onComplete = onComplete
+
         if "orientation" in jtm:
             tm.orientation = parseEnum[TileMapOrientation](jtm["orientation"].getStr())
             if tm.orientation == TileMapOrientation.staggered:
@@ -331,9 +353,24 @@ proc loadTiled*(tm: TileMap, path: string)=
             tm.tileSets = @[]
 
             for jts in jtm["tilesets"]:
-                let ts = loadTileSet(jts)
-                if not ts.isNil:
-                    tm.tileSets.add(ts)
+                if "source" in jts:
+                    ##
+                    closureScope:
+                        let url = serializer.toAbsoluteUrl(jts["source"].getStr())
+                        serializer.startAsyncOp()
+                        loadAsset(url) do(j: JsonNode, err: string):
+                            # todo error
+                            let s = new(Serializer)
+                            s.url = url
+                            s.onComplete = proc() =
+                                serializer.endAsyncOp()
+                            let ts = loadTileSet(j, s)
+                            s.finish()
+                            tm.tileSets.add(ts)
+                else:
+                    let ts = loadTileSet(jts, serializer)
+                    if not ts.isNil:
+                        tm.tileSets.add(ts)
 
         if "layers" in jtm:
             tm.layers = @[]
@@ -345,7 +382,7 @@ proc loadTiled*(tm: TileMap, path: string)=
                     warn "TileMap loadTiled: ", layerType, " doesn't supported!"
                     continue
 
-                var layer = layerCreator(layerType, jl)
+                var layer = layerCreator(layerType, jl, serializer)
                 layer.name = jl["name"].getStr()
                 layer.enabled = jl["visible"].getBVal()
                 layer.alpha = jl["opacity"].getFNum()
@@ -358,8 +395,11 @@ proc loadTiled*(tm: TileMap, path: string)=
                     layer.position.y = jl["offsety"].getFNum()
 
                 tm.layers.add(layer)
-    except:
-        echo getCurrentException().getStackTrace()
-        raise
-    finally:
-        popParentResource()
+        serializer.finish()
+
+proc loadTiledWithResource*(tm: TileMap, path: string) =
+    var done = false
+    tm.loadTiledWithUrl("res://" & path) do():
+        done = true
+    if not done:
+        raise newException(Exception, "Load couold not complete synchronously. Possible reason: asset bundle not preloaded")
