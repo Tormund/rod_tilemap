@@ -8,17 +8,15 @@ import opengl
 import nimx.assets.asset_loading
 
 type
-    BaseTileMapLayer = ref object of RootObj
+    LayerDrawRange = tuple
+        col_start, col_end: int
+        row_start, row_end: int
+
+    BaseTileMapLayer = ref object of Component
         size: Size
-        name*: string
-        enabled*: bool
-        position*: Vector3
-        alpha*: float
 
     TileMapLayer* = ref object of BaseTileMapLayer
-        data*: seq[int]
-        batchImage: SelfContainedImage
-        isDirty: bool
+        data*: seq[int8]
 
     ImageMapLayer* = ref object of BaseTileMapLayer
         image*: Image
@@ -34,12 +32,13 @@ type
         columns: int
 
     TileCollection = ref object of BaseTileSet
-        collection: Table[int, Image]
+        collection: seq[Image]
 
     TileMapOrientation* {.pure.}= enum
         orthogonal
         isometric
-        staggered
+        staggeredX
+        staggeredY
         hexagonal
 
     TileMap* = ref object of Component
@@ -47,18 +46,30 @@ type
         tileSize*: Vector3
         layers: seq[BaseTileMapLayer]
         tileSets: seq[BaseTileSet]
-        batchTextureSize*: Size
-        case orientation*: TileMapOrientation
-        of TileMapOrientation.staggered:
-            isStaggerAxisX: bool
+        tileDrawRect: proc(tm: TileMap, pos: int, tr: var Rect)
+
+        case mOrientation: TileMapOrientation
+        of TileMapOrientation.staggeredX, TileMapOrientation.staggeredY:
             isStaggerIndexOdd: bool
         else: discard
+
+proc position*(l: BaseTileMapLayer): Vector3=
+    return l.node.position
+
+proc alpha*(l: BaseTileMapLayer): float=
+    return l.node.alpha
+
+proc enabled*(l: BaseTileMapLayer): bool=
+    return l.node.enabled
+
+proc name*(l: BaseTileMapLayer): string =
+    return l.node.name
 
 method canDrawTile(ts: BaseTileSet, tid: int): bool=
     result = tid >= ts.firstGid and tid < ts.firstGid + ts.tilesCount
 
 method canDrawTile(ts: TileCollection, tid: int): bool=
-    result = not ts.collection.getOrDefault(tid).isNil
+    result = tid < ts.collection.len and not ts.collection[tid].isNil
 
 method drawTile(ts: BaseTileSet, tid: int, r: Rect, a: float) {.base.}=
     raise newException(Exception, "Abstract method called!")
@@ -76,123 +87,30 @@ method drawTile(ts: TileCollection, tid: int, r: Rect, a: float)=
     if imageSize.width.int != tr.width.int or imageSize.height.int != tr.height.int:
         tr.origin += newPoint(0, r.size.height - imageSize.height)
         tr.size = imageSize
-    # echo "drawTile ", tid, " ", imageSize, " rects ", @[fr, tr]
+
     currentContext().drawImage(image, tr, alpha = a)
 
-proc debugDraw(tm: TileMap, layer: TileMapLayer) =
-    let gl = currentContext().gl
-    gl.disable(gl.DEPTH_TEST)
-
-    case tm.orientation
-    of TileMapOrientation.orthogonal:
-        for x in 0 .. tm.mapSize.width.int:
-            let
-                fp = newVector3(x.float * tm.tileSize.x, 0.0) + layer.position
-                tp = newVector3(x.float * tm.tileSize.x, tm.tileSize.y * tm.mapSize.height) + layer.position
-
-            DDdrawLine(fp, tp)
-
-        for y in 0 .. tm.mapSize.height.int:
-            let
-                fp = newVector3(0.0, y.float * tm.tileSize.y) + layer.position
-                tp = newVector3(tm.tileSize.x * tm.mapSize.height, y.float * tm.tileSize.y) + layer.position
-
-            DDdrawLine(fp, tp)
-
-    of TileMapOrientation.isometric:
-        let firstTilePosX = (tm.mapSize.height) * tm.tileSize.x * 0.5
-
-        for i in 0 .. tm.mapSize.width.int:
-            var x = (i.float * tm.tileSize.x * 0.5) - (0.0 * tm.tileSize.x * 0.5) + firstTilePosX
-            var y = (0.0 * tm.tileSize.y * 0.5) + (i.float * tm.tileSize.y * 0.5)
-            let fp = newVector3(x, y) + layer.position
-
-            x = (i.float * tm.tileSize.x * 0.5) - (tm.mapSize.height * tm.tileSize.x * 0.5) + firstTilePosX
-            y = (tm.mapSize.height * tm.tileSize.y * 0.5) + (i.float * tm.tileSize.y * 0.5)
-            let tp = newVector3(x, y) + layer.position
-
-            DDdrawLine(fp, tp)
-
-        for i in 0 .. tm.mapSize.height.int:
-            var x = (0.0 * tm.tileSize.x * 0.5) - (i.float * tm.tileSize.x * 0.5) + firstTilePosX
-            var y = (i.float * tm.tileSize.y * 0.5) + (0.0 * tm.tileSize.y * 0.5)
-            let fp = newVector3(x, y) + layer.position
-
-            x = (tm.mapSize.width * tm.tileSize.x * 0.5) - (i.float * tm.tileSize.x * 0.5) + firstTilePosX
-            y = (i.float * tm.tileSize.y * 0.5) + (tm.mapSize.width * tm.tileSize.y * 0.5)
-            let tp = newVector3(x, y) + layer.position
-
-            DDdrawLine(fp, tp)
-
-    else: discard
-
-    gl.disable(gl.DEPTH_TEST)
-
 proc layerRect(tm: TileMap, l: TileMapLayer): Rect=
-    case tm.orientation:
+    case tm.mOrientation:
     of TileMapOrientation.orthogonal:
         result = newRect(l.position.x, l.position.y, tm.mapSize.width * tm.tileSize.x, tm.mapSize.height * tm.tileSize.y)
+
     of TileMapOrientation.isometric:
         let
             width = (tm.mapSize.width + tm.mapSize.height) * tm.tileSize.x * 0.5
             height = (tm.mapSize.width + tm.mapSize.height) * tm.tileSize.y * 0.5
         result = newRect(l.position.x, l.position.y, width, height)
 
-    of TileMapOrientation.staggered:
+    of TileMapOrientation.staggeredX:
         result.origin = newPoint(l.position.x, l.position.y)
-        var width, height : float
-        if tm.isStaggerAxisX:
-            width = tm.tileSize.x * (tm.mapSize.width / 2.0 + 0.5)
-            height = tm.tileSize.y * (tm.mapSize.height + 0.5)
-        else:
-            width = tm.tileSize.x * (tm.mapSize.width + 0.5)
-            height = tm.tileSize.y * (tm.mapSize.height / 2.0 + 0.5)
+        result.size = newSize(tm.tileSize.x * (tm.mapSize.width / 2.0 + 0.5), tm.tileSize.y * (tm.mapSize.height + 0.5))
 
-        result.size = newSize(width, height)
+    of TileMapOrientation.staggeredY:
+        result.origin = newPoint(l.position.x, l.position.y)
+        result.size = newSize(tm.tileSize.x * (tm.mapSize.width + 0.5), tm.tileSize.y * (tm.mapSize.height / 2.0 + 0.5))
 
     else:
         discard
-
-proc tileDrawRect(tm: TileMap, pos:int): Rect=
-    var x = 0.0
-    var y = 0.0
-
-    var col = pos div tm.mapSize.width.int
-    var row = pos mod tm.mapSize.width.int
-
-    case tm.orientation:
-    of TileMapOrientation.orthogonal:
-        x = row.float * tm.tileSize.x
-        y = col.float * tm.tileSize.y
-
-    of TileMapOrientation.isometric:
-        let firstTilePosX = (tm.mapSize.height - 1.0) * tm.tileSize.x * 0.5
-        x = (row.float * tm.tileSize.x * 0.5) - (col.float * tm.tileSize.x * 0.5)
-        y = (col.float * tm.tileSize.y * 0.5) + (row.float * tm.tileSize.y * 0.5)
-        x += firstTilePosX
-
-    of TileMapOrientation.staggered:
-        let offIndex = if tm.isStaggerIndexOdd: 0 else: 1
-
-        if tm.isStaggerAxisX:
-            let axisP = (row + offIndex) mod 2
-            x = row.float * tm.tileSize.x * 0.5
-            y = col.float * tm.tileSize.y + axisP.float * 0.5 * tm.tileSize.y
-        else:
-            let axisP = (col + offIndex) mod 2
-            x = row.float * tm.tileSize.x + axisP.float * tm.tileSize.x * 0.5
-            y = col.float * tm.tileSize.y * 0.5
-
-    of TileMapOrientation.hexagonal:
-        x = row.float * tm.tileSize.x
-        y = col.float * tm.tileSize.y
-    else:
-        discard
-
-    result.origin.x = x
-    result.origin.y = y
-    result.size.width = tm.tileSize.x
-    result.size.height = tm.tileSize.y
 
 method drawLayer(layer: BaseTileMapLayer, tm: TileMap) {.base.} =
     raise newException(Exception, "Abstract method called!")
@@ -200,37 +118,51 @@ method drawLayer(layer: BaseTileMapLayer, tm: TileMap) {.base.} =
 method drawLayer(layer: ImageMapLayer, tm: TileMap)=
     currentContext().drawImage(layer.image, newRect(layer.position.x, layer.position.y, layer.image.size.width, layer.image.size.height), alpha = layer.alpha)
 
+proc getViewportRect(l: TileMapLayer): Rect=
+    if not l.node.sceneView.isNil:
+        let camera = l.node.sceneView.camera
+        result.size = camera.viewportSize * camera.node.scale.x
+        result.origin = newPoint(camera.node.worldPos().x, camera.node.worldPos().y)
+        result.origin.x = result.origin.x - camera.viewportSize.width  * 0.5 * camera.node.scale.x
+        result.origin.y = result.origin.y - camera.viewportSize.height * 0.5 * camera.node.scale.y
+
+proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerDrawRange =
+    let layerLen = layer.data.len
+    result.row_start = (r.x / ts.x).int
+    result.row_end = ((r.x + r.width) / (ts.x * 0.5)).int
+
+    result.col_start = (r.y / ts.y).int
+    result.col_end = ((r.y + r.height) / ts.y).int
+
 method drawLayer(layer: TileMapLayer, tm: TileMap)=
     var r = tm.layerRect(layer)
+    var worldLayerRect = newRect(newPoint(layer.node.worldPos().x, layer.node.worldPos().y), r.size)
+    let viewRect = layer.getViewportRect()
 
-    if layer.batchImage.isNil:
-        layer.batchImage = imageWithSize(r.size)
-        layer.isDirty = true
+    if worldLayerRect.intersect(viewRect):
+        let (cols, cole, rows, rowe) = layer.getDrawRange(viewRect, tm.tileSize)
 
-    if layer.isDirty and layer.enabled:
+        let mapWidth = tm.mapSize.width.int
+        var tileDrawRect = newRect(0.0, 0.0, 0.0, 0.0)
+        let camera = layer.node.sceneView.camera
 
-        layer.batchImage.draw() do():
-            for pos, tileId in layer.data: # todo iterate only tiles in viewport with some offset
-                if tileId == 0: continue
-                let tr = tm.tileDrawRect(pos)
+        echo " h ", cole - cols, " w ", rowe - rows, " count " , (cole - cols) * (rowe - rows), " camscale ", camera.node.scale.x
 
-                for tileSet in tm.tileSets:
-                    if tileSet.canDrawTile(tileId):
-                        tileSet.drawTile(tileId, tr, layer.alpha)
-                        break
+        for y in cols .. cole:
+            let mapWidthY = mapWidth * y
+            for x in rows .. rowe:
+                let pos = mapWidthY + x
 
-            layer.isDirty = false
+                if pos < layer.data.len:
+                    let tileId = layer.data[pos]
+                    if tileId == 0: continue
 
-        let gl = currentContext().gl
-        gl.bindTexture(gl.TEXTURE_2D, layer.batchImage.texture)
-        gl.generateMipmap(gl.TEXTURE_2D)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST)
+                    tm.tileDrawRect(tm, pos, tileDrawRect)
 
-    currentContext().drawImage(layer.batchImage, r)
-
-    if tm.node.sceneView.editing:
-        tm.debugDraw(layer)
+                    for tileSet in tm.tileSets:
+                        if tileSet.canDrawTile(tileId):
+                            tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
+                            break
 
 method draw*(tm: TileMap) =
     for layer in tm.layers:
@@ -255,6 +187,69 @@ method getBBox*(tm: TileMap): BBox =
 
     echo "getBBox tiledmap ", [result.minPoint, result.maxPoint]
 
+proc staggeredYTileRect(tm: TileMap, pos: int, tr: var Rect)=
+    var row = (pos div tm.mapSize.width.int).float
+    var col = (pos mod tm.mapSize.width.int).float
+
+    let offIndex = if tm.isStaggerIndexOdd: 0 else: 1
+    let axisP = (row.int + offIndex) mod 2
+
+    tr.origin.x = col * tm.tileSize.x + axisP.float * tm.tileSize.x * 0.5
+    tr.origin.y = row * tm.tileSize.y * 0.5
+
+    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
+
+proc staggeredXTileRect(tm: TileMap, pos: int, tr: var Rect)=
+    var row = (pos div tm.mapSize.width.int).float
+    var col = (pos mod tm.mapSize.width.int).float
+
+    let offIndex = if tm.isStaggerIndexOdd: 0 else: 1
+    let axisP = (col.int + offIndex) mod 2
+
+    tr.origin.x = col * tm.tileSize.x * 0.5
+    tr.origin.y = row * tm.tileSize.y + axisP.float * 0.5 * tm.tileSize.y
+
+    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
+
+proc isometricTileRect(tm: TileMap, pos: int, tr: var Rect)=
+    var row = (pos div tm.mapSize.width.int).float
+    var col = (pos mod tm.mapSize.width.int).float
+
+    let halfTileWidth  = tm.tileSize.x * 0.5
+    let halfTileHeigth = tm.tileSize.y * 0.5
+
+    tr.origin.x = (col * halfTileWidth) - (row * tm.tileSize.x * 0.5) + (tm.mapSize.width - 1.0) * halfTileWidth
+    tr.origin.y = (row * halfTileHeigth) + (col * halfTileHeigth)
+
+    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
+
+proc orthogonalTileRect(tm: TileMap, pos: int, tr: var Rect)=
+    var row = (pos div tm.mapSize.width.int).float
+    var col = (pos mod tm.mapSize.width.int).float
+
+    tr.origin.x = col * tm.tileSize.x
+    tr.origin.y = row * tm.tileSize.y
+
+    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
+
+proc orientation*(tm: TileMap): TileMapOrientation=
+    result = tm.mOrientation
+
+proc `orientation=`*(tm: TileMap, val: TileMapOrientation)=
+    tm.mOrientation = val
+
+    case val:
+    of TileMapOrientation.orthogonal:
+        tm.tileDrawRect = orthogonalTileRect
+    of TileMapOrientation.isometric:
+        tm.tileDrawRect = isometricTileRect
+    of TileMapOrientation.staggeredX:
+        tm.tileDrawRect = staggeredXTileRect
+    of TileMapOrientation.staggeredY:
+        tm.tileDrawRect = staggeredYTileRect
+    else:
+        tm.tileDrawRect = orthogonalTileRect
+
 #todo: serialize support
 # method deserialize*(c: TileMap, j: JsonNode, serealizer: Serializer) =
 #     discard
@@ -265,35 +260,44 @@ method getBBox*(tm: TileMap): BBox =
 method visitProperties*(tm: TileMap, p: var PropertyVisitor) =
     p.visitProperty("mapSize", tm.mapSize)
     p.visitProperty("tileSize", tm.tileSize)
+    p.visitProperty("orientation", tm.orientation)
 
 registerComponent(TileMap, "TileMap")
+registerComponent(ImageMapLayer, "TileMap")
+registerComponent(TileMapLayer, "TileMap")
 
 #[
     Tiled support http://www.mapeditor.org/
  ]#
 
-var tiledLayerCreators = initTable[string, proc(typeName: string, jl: JsonNode, s: Serializer): BaseTileMapLayer]()
+var tiledLayerCreators = initTable[string, proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer]()
 
-tiledLayerCreators["imagelayer"] = proc(typeName: string, jl: JsonNode, s: Serializer): BaseTileMapLayer=
+tiledLayerCreators["imagelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer =
     let layer = new(ImageMapLayer)
     if "image" in jl:
         deserializeImage(jl["image"], s) do(img: Image, err: string):
             layer.image = img
+
     result = layer
 
-tiledLayerCreators["tilelayer"] = proc(typeName: string, jl: JsonNode, s: Serializer): BaseTileMapLayer=
+tiledLayerCreators["tilelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer =
     let layer = new(TileMapLayer)
-    layer.data = @[]
+    let dataSize = tm.mapSize.width.int * tm.mapSize.height.int
+    layer.data = newSeq[int8](dataSize)
+    var i = 0
     for jld in jl["data"]:
-        layer.data.add(jld.getNum().int)
-
-    layer.isDirty = true
+        if i < dataSize:
+            layer.data[i] = jld.getNum().int8
+        inc i
 
     result = layer
+
+proc checkLoadingErr(err: string) {.raises: Exception.}=
+    if not err.isNil:
+        raise newException(Exception, err)
 
 proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
     var firstgid = 0
-
     if "firstgid" in jTileSet:
         firstgid = jTileSet["firstgid"].getNum().int
 
@@ -301,22 +305,29 @@ proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
         let tileCollection = new(TileCollection)
 
         tileCollection.tilesCount = jTileSet["tilecount"].getNum().int
-        tileCollection.collection = initTable[int, Image]()
+        tileCollection.collection = @[]
         var tilesFound = 0
-        var i = 1
+        var i = 0
         while tilesFound < tileCollection.tilesCount:
             let k = $i
             if k in jTileSet["tiles"]:
                 inc tilesFound
-                echo "start load ", i + firstgid, " firstgid ", firstgid
                 closureScope:
                     let tilePath = jTileSet["tiles"][k]["image"].getStr()
                     let fgid = firstgid
                     let ii = i + firstgid
 
                     deserializeImage(jTileSet["tiles"][k]["image"], serializer) do(img: Image, err: string):
+                        checkLoadingErr(err)
+
+                        if ii > tileCollection.collection.len - 1:
+                            tileCollection.collection.setLen(ii + 1)
+
                         tileCollection.collection[ii] = img
-                        echo "register tileid ", ii, " with path ", tilePath, " ", fgid
+
+            else:
+                if i > 10_000:
+                    raise newException(Exception, "TileSet corrupted")
             inc i
 
         result = tileCollection
@@ -324,7 +335,7 @@ proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
     elif "image" in jTileSet:
         let tileSheet = new(TileSheet)
         deserializeImage(jTileSet["image"], serializer) do(img: Image, err: string):
-            # TODO: handle error
+            checkLoadingErr(err)
             tileSheet.sheet = img
 
         tileSheet.columns = jTileSet["columns"].getNum().int
@@ -343,16 +354,23 @@ proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
 
 proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
     loadAsset(url) do(jtm: JsonNode, err: string):
-        #todo: err
+        checkLoadingErr(err)
+
         let serializer = new(Serializer)
         serializer.url = url
         serializer.onComplete = onComplete
 
         if "orientation" in jtm:
-            tm.orientation = parseEnum[TileMapOrientation](jtm["orientation"].getStr())
-            if tm.orientation == TileMapOrientation.staggered:
-                tm.isStaggerAxisX = jtm["staggeraxis"].getStr() == "x"
-                tm.isStaggerIndexOdd = jtm["staggerindex"].getStr() == "odd"
+            try:
+                tm.orientation = parseEnum[TileMapOrientation](jtm["orientation"].getStr())
+            except:
+                if jtm["orientation"].getStr() == "staggered":
+                    let isStaggerAxisX = jtm["staggeraxis"].getStr() == "x"
+                    if isStaggerAxisX:
+                        tm.orientation = TileMapOrientation.staggeredX
+                    else:
+                        tm.orientation = TileMapOrientation.staggeredY
+                    tm.isStaggerIndexOdd = jtm["staggerindex"].getStr() == "odd"
 
         if "width" in jtm and "height" in jtm:
             tm.mapSize = newSize(jtm["width"].getFNum(), jtm["height"].getFNum())
@@ -361,32 +379,6 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
             let tWidth = jtm["tilewidth"].getNum().float
             let tHeigth = jtm["tileheight"].getNum().float
             tm.tileSize = newVector3(tWidth, tHeigth)
-
-        if "tilesets" in jtm:
-            tm.tileSets = @[]
-
-            for jts in jtm["tilesets"]:
-                if "source" in jts:
-                    ##
-                    closureScope:
-                        let url = serializer.toAbsoluteUrl(jts["source"].getStr())
-                        serializer.startAsyncOp()
-                        let fg = jts["firstgid"]
-
-                        loadAsset(url) do(j: JsonNode, err: string):
-                            # todo error
-                            let s = new(Serializer)
-                            s.url = url
-                            j["firstgid"] = fg
-                            s.onComplete = proc() =
-                                serializer.endAsyncOp()
-                            let ts = loadTileSet(j, s)
-                            s.finish()
-                            tm.tileSets.add(ts)
-                else:
-                    let ts = loadTileSet(jts, serializer)
-                    if not ts.isNil:
-                        tm.tileSets.add(ts)
 
         if "layers" in jtm:
             tm.layers = @[]
@@ -398,24 +390,66 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                     warn "TileMap loadTiled: ", layerType, " doesn't supported!"
                     continue
 
-                var layer = layerCreator(layerType, jl, serializer)
-                layer.name = jl["name"].getStr()
-                layer.enabled = jl["visible"].getBVal()
-                layer.alpha = jl["opacity"].getFNum()
+                var layer = tm.layerCreator(jl, serializer)
+                let name = jl["name"].getStr()
+                let enabled = jl["visible"].getBVal()
+                let alpha = jl["opacity"].getFNum()
 
                 layer.size = newSize(jl["width"].getFNum(), jl["height"].getFNum())
-                layer.position = newVector3()
+                var position = newVector3()
                 if "offsetx" in jl:
-                    layer.position.x = jl["offsetx"].getFNum()
+                    position.x = jl["offsetx"].getFNum()
                 if "offsety" in jl:
-                    layer.position.y = jl["offsety"].getFNum()
+                    position.y = jl["offsety"].getFNum()
 
+                var layerNode = newNode(name)
+                layerNode.position = position
+                layerNode.alpha = alpha
+                layerNode.enabled = enabled
+
+                if layerType == "imagelayer":
+                    layerNode.setComponent("ImageMapLayer", layer)
+                elif layerType == "tilelayer":
+                    layerNode.setComponent("TileMapLayer", layer)
+
+                layer.node = layerNode
+                tm.node.addChild(layerNode)
                 tm.layers.add(layer)
+
+        if "tilesets" in jtm:
+            tm.tileSets = @[]
+
+            for jts in jtm["tilesets"]:
+                if "source" in jts:
+                    closureScope:
+                        let url = serializer.toAbsoluteUrl(jts["source"].getStr())
+                        serializer.startAsyncOp()
+                        let fg = jts["firstgid"]
+
+                        loadAsset(url) do(j: JsonNode, err: string):
+                            checkLoadingErr(err)
+
+                            let s = new(Serializer)
+                            s.url = url
+                            j["firstgid"] = fg
+                            s.onComplete = proc() =
+                                serializer.endAsyncOp()
+
+                            let ts = loadTileSet(j, s)
+                            s.finish()
+                            tm.tileSets.add(ts)
+                else:
+                    let ts = loadTileSet(jts, serializer)
+                    if not ts.isNil:
+                        tm.tileSets.add(ts)
+
         serializer.finish()
 
 proc loadTiledWithResource*(tm: TileMap, path: string) =
     var done = false
     tm.loadTiledWithUrl("res://" & path) do():
         done = true
+        echo "done loadTiledWithResource"
     if not done:
-        raise newException(Exception, "Load couold not complete synchronously. Possible reason: asset bundle not preloaded")
+        echo "failed loadTiledWithResource"
+    #     raise newException(Exception, "Load could not complete synchronously. Possible reason: asset bundle not preloaded")
