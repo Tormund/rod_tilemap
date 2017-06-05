@@ -304,24 +304,20 @@ tiledLayerCreators["tilelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer)
         layer.actualSize.maxy = acts["maxY"].getNum().int
 
         dataSize = (layer.actualSize.maxx - layer.actualSize.minx) * (layer.actualSize.maxy - layer.actualSize.miny)
-        echo "layer actualSize ", layer.actualSize , " datasize ", dataSize, " ", jl["name"]
+
     else:
         layer.actualSize.minx = 0
         layer.actualSize.maxx = tm.mapSize.width.int
         layer.actualSize.miny = 0
         layer.actualSize.maxy = tm.mapSize.height.int
-        echo "default size "
 
     layer.data = newSeq[int16](dataSize)
-    if layer.data.len != jl["data"].len:
-        warn "Incorrect layer data size ", jl["data"].len , " versus ", dataSize
 
     var i = 0
-    echo "starting ", jl["name"], " ",  layer.data.len , " ", jl["data"].len
     for jld in jl["data"]:
         layer.data[i] = jld.getNum().int16
         inc i
-    echo "\tdone ", jl["name"], " ",  layer.data.len , " ", jl["data"].len
+
 
     result = layer
 
