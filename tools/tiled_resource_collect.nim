@@ -67,11 +67,18 @@ proc readTiledFile(path: string)=
     tilesetNewPath  = resourceNewPath
 
     var jTiled = parseFile(path)
-    let width = jTiled["width"].getNum().int
-    let height = jTiled["height"].getNum().int
+    var width = jTiled["width"].getNum().int
+    var height = jTiled["height"].getNum().int
 
     if "layers" in jTiled:
         var layers = newJArray()
+        var isStaggered = jTiled["orientation"].str == "staggered"
+        var staggeredAxisX: bool
+        var isStaggerIndexOdd: bool
+        if isStaggered:
+            staggeredAxisX = jTiled["staggeraxis"].str == "x"
+            isStaggerIndexOdd = jTiled["staggerindex"].getStr() == "odd"
+
         for l in jTiled["layers"]:
             if l["type"].str == "imagelayer":
                 if "image" in l and l["image"].str.len > 0:
@@ -90,10 +97,17 @@ proc readTiledFile(path: string)=
                 var maxX = 0
                 var maxY = 0
 
-                for x in 0 ..< width:
-                    for y in 0 ..< height:
-                        let off = (y * width + x)
-                        if data[off].uint8 != 0:
+                # for i in 0 ..< data.len:
+                #     var x = i mod width
+                #     var y = i div height
+
+                for y in 0 ..< height:
+                    for x in 0 ..< width:
+                    # if isStaggered:
+                    #     if staggeredAxisX:
+
+                        let off = y * width + x
+                        if data[off] != 0:
                             if x > maxX: maxX = x
                             if x < minX: minX = x
                             if y > maxY: maxY = y
@@ -104,8 +118,8 @@ proc readTiledFile(path: string)=
                 var newData = newJArray()
                 if not allDataEmpty:
                     layers.add(l)
-                    for x in minX .. maxX:
-                        for y in minY .. maxY:
+                    for y in minY .. maxY:
+                        for x in minX .. maxX:
                             let off = (y * width + x)
                             newData.add(%data[off])
                             data[off] = 0

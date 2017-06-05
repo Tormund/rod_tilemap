@@ -129,22 +129,23 @@ proc getViewportRect(l: TileMapLayer): Rect=
 
 proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
     let layerLen = layer.data.len
-    result.minx = (r.x / ts.x).int
-    result.maxx = ((r.x + r.width) / (ts.x * 0.5)).int
+    result.miny = (r.x / ts.x).int
+    result.maxy = ((r.x + r.width) / (ts.x * 0.5)).int
 
-    result.miny = (r.y / ts.y).int
-    result.maxy = ((r.y + r.height) / ts.y).int
+    result.minx = (r.y / ts.y).int
+    result.maxx = ((r.y + r.height) / ts.y).int
 
-proc tileAtPosition(layer: TileMapLayer, tm: TileMap, pos: int): int=
-    var x = pos div tm.mapSize.width.int
-    var y = pos mod tm.mapSize.width.int
-
-    if (x >= layer.actualSize.minx and x <= layer.actualSize.maxx) and (y >= layer.actualSize.miny and y <= layer.actualSize.maxy):
+proc tileAtPosition(layer: TileMapLayer, tm: TileMap, x,y: int): int=
+    var x = x
+    var y = y
+    if (x >= layer.actualSize.minx and x < layer.actualSize.maxx) and (y >= layer.actualSize.miny and y < layer.actualSize.maxy):
         x -= layer.actualSize.minx
         y -= layer.actualSize.miny
-        let idx = (layer.actualSize.maxx - layer.actualSize.minX) * y + x
 
-        result = layer.data[idx]
+        let idx = (layer.actualSize.maxx - layer.actualSize.minx) * y + x
+
+        if idx < layer.data.len:
+            result = layer.data[idx]
 
 method drawLayer(layer: TileMapLayer, tm: TileMap)=
     var r = tm.layerRect(layer)
@@ -153,28 +154,25 @@ method drawLayer(layer: TileMapLayer, tm: TileMap)=
 
     if worldLayerRect.intersect(viewRect):
         let (cols, cole, rows, rowe) = layer.getDrawRange(viewRect, tm.tileSize)
-
+        echo "rows ", rows, " rowe ", rowe
         let mapWidth = tm.mapSize.width.int
         var tileDrawRect = newRect(0.0, 0.0, 0.0, 0.0)
         let camera = layer.node.sceneView.camera
-
-        # echo " h ", cole - cols, " w ", rowe - rows, " count " , (cole - cols) * (rowe - rows), " camscale ", camera.node.scale.x
 
         for y in cols .. cole:
             let mapWidthY = mapWidth * y
             for x in rows .. rowe:
                 let pos = mapWidthY + x
 
-                if pos < layer.data.len:
-                    let tileId = layer.tileAtPosition(tm, pos)
-                    if tileId == 0: continue
+                let tileId = layer.tileAtPosition(tm, x, y)
+                if tileId == 0: continue
 
-                    tm.tileDrawRect(tm, pos, tileDrawRect)
+                tm.tileDrawRect(tm, pos, tileDrawRect)
 
-                    for tileSet in tm.tileSets:
-                        if tileSet.canDrawTile(tileId):
-                            tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
-                            break
+                for tileSet in tm.tileSets:
+                    if tileSet.canDrawTile(tileId):
+                        tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
+                        break
 
 method draw*(tm: TileMap) =
     for layer in tm.layers:
@@ -318,7 +316,6 @@ tiledLayerCreators["tilelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer)
         layer.data[i] = jld.getNum().int16
         inc i
 
-
     result = layer
 
 proc checkLoadingErr(err: string) {.raises: Exception.}=
@@ -335,29 +332,18 @@ proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
 
         tileCollection.tilesCount = jTileSet["tilecount"].getNum().int
         tileCollection.collection = @[]
-        var tilesFound = 0
-        var i = 0
-        while tilesFound < tileCollection.tilesCount:
-            let k = $i
-            if k in jTileSet["tiles"]:
-                inc tilesFound
-                closureScope:
-                    let tilePath = jTileSet["tiles"][k]["image"].getStr()
-                    let fgid = firstgid
-                    let ii = i + firstgid
 
-                    deserializeImage(jTileSet["tiles"][k]["image"], serializer) do(img: Image, err: string):
-                        checkLoadingErr(err)
+        for k, v in jTileSet["tiles"]:
+            closureScope:
+                let ii = parseInt(k) + firstgid
 
-                        if ii > tileCollection.collection.len - 1:
-                            tileCollection.collection.setLen(ii + 1)
+                deserializeImage(v["image"], serializer) do(img: Image, err: string):
+                    checkLoadingErr(err)
 
-                        tileCollection.collection[ii] = img
+                    if ii > tileCollection.collection.len - 1:
+                        tileCollection.collection.setLen(ii + 1)
 
-            else:
-                if i > 10_000:
-                    raise newException(Exception, "TileSet corrupted")
-            inc i
+                    tileCollection.collection[ii] = img
 
         result = tileCollection
 
