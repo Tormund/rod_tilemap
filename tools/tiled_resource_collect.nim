@@ -60,12 +60,8 @@ proc readTileSet(jn: JsonNode, pathFrom: string = "")=
     if pathFrom.len > 0:
         writeFile(pathFrom, $jn)
 
-
-
 proc readTiledFile(path: string)=
-
     let tmpSplit = path.splitFile()
-
     currentLocation = tmpSplit.dir
     resourceNewPath = "assets"
     tilesetNewPath  = resourceNewPath
@@ -74,13 +70,13 @@ proc readTiledFile(path: string)=
     let width = jTiled["width"].getNum().int
     let height = jTiled["height"].getNum().int
 
-    echo "map width ", width, " height ", height
-    var optimizedTiles = 0
-    var totalDefaultDataLen = 0
     if "layers" in jTiled:
+        var layers = newJArray()
         for l in jTiled["layers"]:
             if l["type"].str == "imagelayer":
-                l.moveImageFile("image")
+                if "image" in l and l["image"].str.len > 0:
+                    layers.add(l)
+                    l.moveImageFile("image")
 
             if "data" in l:
                 let jdata = l["data"]
@@ -89,92 +85,47 @@ proc readTiledFile(path: string)=
                 for jd in jdata:
                     data.add(jd.num.int)
 
-                var cols = 0
-                var cole = width
-                var rows = 0
-                var rowe = height
+                var minX = width - 1
+                var minY = height - 1
+                var maxX = 0
+                var maxY = 0
 
-                var topDone = false
-                while not topDone:
-                    var colSum = 0
-                    for col in 0 .. width:
-                        let i = col + rows * width
-                        if i < data.len:
-                            colSum += data[i]
-                        else:
-                            echo "colTop index ", i
+                for x in 0 ..< width:
+                    for y in 0 ..< height:
+                        let off = (y * width + x)
+                        if data[off].uint8 != 0:
+                            if x > maxX: maxX = x
+                            if x < minX: minX = x
+                            if y > maxY: maxY = y
+                            if y < minY: minY = y
 
-                    if colSum != 0:
-                        topDone = true
-                    else:
-                        inc rows
-                        topDone = rows == rowe
-
-                var bottomDone = false
-                while not bottomDone:
-                    var colSum = 0
-                    for col in 0 .. width:
-                        let i = col + (rowe - 1) * width
-                        if i < data.len and i >= 0:
-                            colSum += data[i]
-                        else:
-                            echo "colBot index ", i
-                    if colSum != 0:
-                        bottomDone = true
-                    else:
-                        dec rowe
-                        bottomDone = rows >= rowe
-
-                var leftDone = false
-                while not leftDone:
-                    var rowSum = 0
-                    for row in 0 .. height:
-                        let i = row * height + cols
-                        if i < data.len:
-                            rowSum += data[i]
-                        else:
-                            echo "rowLeft index ", i, " ", cols
-
-                    if rowSum != 0:
-                        leftDone = true
-                    else:
-                        inc cols
-                        leftDone = cols == cole
-
-                var rightDone = false
-                while not rightDone:
-                    var rowSum = 0
-                    for row in 0 .. height:
-                        let i = row * height + (cole - 1)
-                        if i >= 0 and i < data.len:
-                            rowSum += data[i]
-                        else:
-                            echo "rowRight i ", i
-
-                    if rowSum != 0:
-                        rightDone = true
-                    else:
-                        dec cole
-                        rightDone = cols >= cole
+                var allDataEmpty = minY == height - 1 and minX == width - 1
 
                 var newData = newJArray()
-                for x in cols ..< cole:
-                    for y in rows ..< rowe:
-                        let i = width * y + x
-                        newData.add(%data[i])
-                        data[i] = 0
+                if not allDataEmpty:
+                    layers.add(l)
+                    for x in minX .. maxX:
+                        for y in minY .. maxY:
+                            let off = (y * width + x)
+                            newData.add(%data[off])
+                            data[off] = 0
 
-                for i, d in data:
-                    if d != 0:
-                        echo "checkFailed !!! at x ", i mod width, " y ", i div width, " cols ", cols, " cole ", cole , " rows ", rows, " rowe ", rowe
+                    for i, d in data:
+                        if d != 0:
+                            raise newException(Exception, "Optimization failed")
 
-                totalDefaultDataLen += jdata.len
-                optimizedTiles += jdata.len - newData.len
+                    var actualSize = newJObject()
+                    actualSize["minX"] = %minX
+                    actualSize["maxX"] = %(maxX + 1)
+                    actualSize["minY"] = %minY
+                    actualSize["maxY"] = %(maxY + 1)
+                    l["actualSize"] = actualSize
+
                 l["data"] = newData
-                # l["cutDataFront"] = %cutFront
-                # l["cutDataBack"] = %cutBack
 
-    echo "optimized ", optimizedTiles, " ", totalDefaultDataLen , " % ", optimizedTiles / totalDefaultDataLen
+
+
+        jTiled["layers"] = layers
 
     if "tilesets" in jTiled:
         let jTileSets = jTiled["tilesets"]
@@ -193,7 +144,7 @@ proc readTiledFile(path: string)=
             else:
                 readTileSet(jts)
 
-    # writeFile(path, $jTiled)
+    writeFile(path, $jTiled)
 
 proc main()=
     var inFileName = ""
@@ -209,4 +160,5 @@ proc main()=
             echo "\n\n Running in safeMode !!\n\n"
 
         readTiledFile(inFileName)
+
 main()
