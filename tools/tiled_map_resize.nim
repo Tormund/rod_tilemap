@@ -58,6 +58,7 @@ proc resizeTiledTmxMap(path:string)=
     for xn in xMap:
         let offx = xn.attr("offsetx")
         let offy = xn.attr("offsety")
+
         if offx.len > 0:
             let lOffsetx = parseFloat(offx)
             xn.attrs["offsetx"] = $(lOffsetx * ratioX).int

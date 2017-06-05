@@ -8,15 +8,16 @@ import opengl
 import nimx.assets.asset_loading
 
 type
-    LayerDrawRange = tuple
-        col_start, col_end: int
-        row_start, row_end: int
+    LayerRange = tuple
+        minx, maxx: int
+        miny, maxy: int
 
     BaseTileMapLayer = ref object of Component
         size: Size
+        actualSize: LayerRange
 
     TileMapLayer* = ref object of BaseTileMapLayer
-        data*: seq[int8]
+        data*: seq[int16]
 
     ImageMapLayer* = ref object of BaseTileMapLayer
         image*: Image
@@ -126,13 +127,24 @@ proc getViewportRect(l: TileMapLayer): Rect=
         result.origin.x = result.origin.x - camera.viewportSize.width  * 0.5 * camera.node.scale.x
         result.origin.y = result.origin.y - camera.viewportSize.height * 0.5 * camera.node.scale.y
 
-proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerDrawRange =
+proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
     let layerLen = layer.data.len
-    result.row_start = (r.x / ts.x).int
-    result.row_end = ((r.x + r.width) / (ts.x * 0.5)).int
+    result.minx = (r.x / ts.x).int
+    result.maxx = ((r.x + r.width) / (ts.x * 0.5)).int
 
-    result.col_start = (r.y / ts.y).int
-    result.col_end = ((r.y + r.height) / ts.y).int
+    result.miny = (r.y / ts.y).int
+    result.maxy = ((r.y + r.height) / ts.y).int
+
+proc tileAtPosition(layer: TileMapLayer, tm: TileMap, pos: int): int=
+    var x = pos div tm.mapSize.width.int
+    var y = pos mod tm.mapSize.width.int
+
+    if (x >= layer.actualSize.minx and x <= layer.actualSize.maxx) and (y >= layer.actualSize.miny and y <= layer.actualSize.maxy):
+        x -= layer.actualSize.minx
+        y -= layer.actualSize.miny
+        let idx = (layer.actualSize.maxx - layer.actualSize.minX) * y + x
+
+        result = layer.data[idx]
 
 method drawLayer(layer: TileMapLayer, tm: TileMap)=
     var r = tm.layerRect(layer)
@@ -146,7 +158,7 @@ method drawLayer(layer: TileMapLayer, tm: TileMap)=
         var tileDrawRect = newRect(0.0, 0.0, 0.0, 0.0)
         let camera = layer.node.sceneView.camera
 
-        echo " h ", cole - cols, " w ", rowe - rows, " count " , (cole - cols) * (rowe - rows), " camscale ", camera.node.scale.x
+        # echo " h ", cole - cols, " w ", rowe - rows, " count " , (cole - cols) * (rowe - rows), " camscale ", camera.node.scale.x
 
         for y in cols .. cole:
             let mapWidthY = mapWidth * y
@@ -154,7 +166,7 @@ method drawLayer(layer: TileMapLayer, tm: TileMap)=
                 let pos = mapWidthY + x
 
                 if pos < layer.data.len:
-                    let tileId = layer.data[pos]
+                    let tileId = layer.tileAtPosition(tm, pos)
                     if tileId == 0: continue
 
                     tm.tileDrawRect(tm, pos, tileDrawRect)
@@ -274,7 +286,7 @@ var tiledLayerCreators = initTable[string, proc(tm: TileMap, jl: JsonNode, s: Se
 
 tiledLayerCreators["imagelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer =
     let layer = new(ImageMapLayer)
-    if "image" in jl:
+    if "image" in jl and jl["image"].str.len > 0:
         deserializeImage(jl["image"], s) do(img: Image, err: string):
             layer.image = img
 
@@ -282,13 +294,34 @@ tiledLayerCreators["imagelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer
 
 tiledLayerCreators["tilelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer =
     let layer = new(TileMapLayer)
-    let dataSize = tm.mapSize.width.int * tm.mapSize.height.int
-    layer.data = newSeq[int8](dataSize)
+
+    var dataSize = (tm.mapSize.width * tm.mapSize.height).int
+    if "actualSize" in jl:
+        let acts = jl["actualSize"]
+        layer.actualSize.minx = acts["minX"].getNum().int
+        layer.actualSize.maxx = acts["maxX"].getNum().int
+        layer.actualSize.miny = acts["minY"].getNum().int
+        layer.actualSize.maxy = acts["maxY"].getNum().int
+
+        dataSize = (layer.actualSize.maxx - layer.actualSize.minx) * (layer.actualSize.maxy - layer.actualSize.miny)
+        echo "layer actualSize ", layer.actualSize , " datasize ", dataSize, " ", jl["name"]
+    else:
+        layer.actualSize.minx = 0
+        layer.actualSize.maxx = tm.mapSize.width.int
+        layer.actualSize.miny = 0
+        layer.actualSize.maxy = tm.mapSize.height.int
+        echo "default size "
+
+    layer.data = newSeq[int16](dataSize)
+    if layer.data.len != jl["data"].len:
+        warn "Incorrect layer data size ", jl["data"].len , " versus ", dataSize
+
     var i = 0
+    echo "starting ", jl["name"], " ",  layer.data.len , " ", jl["data"].len
     for jld in jl["data"]:
-        if i < dataSize:
-            layer.data[i] = jld.getNum().int8
+        layer.data[i] = jld.getNum().int16
         inc i
+    echo "\tdone ", jl["name"], " ",  layer.data.len , " ", jl["data"].len
 
     result = layer
 
