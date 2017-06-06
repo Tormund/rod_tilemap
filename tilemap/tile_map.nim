@@ -159,8 +159,6 @@ proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:i
 
         var x = position.x / tileWidth
         var y = position.y / tileHeight
-        let xi = x.int
-        let yi = y.int
         var cx = x - x.int.float + offset
         var cy = y - y.int.float
 
@@ -170,7 +168,7 @@ proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:i
         let botleft  = cy - cx <= tileCoof
         let botright = cx + cy <= 1.0 + tileCoof
 
-        x = (xi * 2).float
+        x = (x.int * 2).float
 
         if not topleft:
             y -= 1.0
