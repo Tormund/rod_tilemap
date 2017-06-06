@@ -15,9 +15,11 @@ type
     BaseTileMapLayer = ref object of Component
         size: Size
         actualSize: LayerRange
+        map: TileMap
 
     TileMapLayer* = ref object of BaseTileMapLayer
         data*: seq[int16]
+        tileSize: Vector3
 
     ImageMapLayer* = ref object of BaseTileMapLayer
         image*: Image
@@ -91,24 +93,28 @@ method drawTile(ts: TileCollection, tid: int, r: Rect, a: float)=
 
     currentContext().drawImage(image, tr, alpha = a)
 
-proc layerRect(tm: TileMap, l: TileMapLayer): Rect=
+proc layerSize(l: TileMapLayer): Size=
+    return newSize((l.actualSize.maxx - l.actualSize.minx).float, (l.actualSize.maxy - l.actualSize.miny).float)
+
+proc layerRect(tm: TileMap, l: TileMapLayer): Rect =
+    let layerSize = l.layerSize
     case tm.mOrientation:
     of TileMapOrientation.orthogonal:
-        result = newRect(l.position.x, l.position.y, tm.mapSize.width * tm.tileSize.x, tm.mapSize.height * tm.tileSize.y)
+        result = newRect(l.position.x, l.position.y, layerSize.width * l.tileSize.x, layerSize.height * l.tileSize.y)
 
     of TileMapOrientation.isometric:
         let
-            width = (tm.mapSize.width + tm.mapSize.height) * tm.tileSize.x * 0.5
-            height = (tm.mapSize.width + tm.mapSize.height) * tm.tileSize.y * 0.5
+            width = (layerSize.width + layerSize.height) * l.tileSize.x * 0.5
+            height = (layerSize.width + layerSize.height) * l.tileSize.y * 0.5
         result = newRect(l.position.x, l.position.y, width, height)
 
     of TileMapOrientation.staggeredX:
         result.origin = newPoint(l.position.x, l.position.y)
-        result.size = newSize(tm.tileSize.x * (tm.mapSize.width / 2.0 + 0.5), tm.tileSize.y * (tm.mapSize.height + 0.5))
+        result.size = newSize(l.tileSize.x * (layerSize.width / 2.0 + 0.5), l.tileSize.y * (layerSize.height + 0.5))
 
     of TileMapOrientation.staggeredY:
         result.origin = newPoint(l.position.x, l.position.y)
-        result.size = newSize(tm.tileSize.x * (tm.mapSize.width + 0.5), tm.tileSize.y * (tm.mapSize.height / 2.0 + 0.5))
+        result.size = newSize(l.tileSize.x * (layerSize.width + 0.5), l.tileSize.y * (layerSize.height / 2.0 + 0.5))
 
     else:
         discard
@@ -135,44 +141,102 @@ proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
     result.minx = (r.y / ts.y).int
     result.maxx = ((r.y + r.height) / ts.y).int
 
-proc tileAtPosition(layer: TileMapLayer, tm: TileMap, x,y: int): int=
-    var x = x
-    var y = y
+proc tileAtXY*(layer: TileMapLayer, x, y: int): int=
     if (x >= layer.actualSize.minx and x < layer.actualSize.maxx) and (y >= layer.actualSize.miny and y < layer.actualSize.maxy):
-        x -= layer.actualSize.minx
-        y -= layer.actualSize.miny
 
-        let idx = (layer.actualSize.maxx - layer.actualSize.minx) * y + x
-
+        let idx = (layer.actualSize.maxx - layer.actualSize.minx) * (y - layer.actualSize.miny) + (x - layer.actualSize.minx)
         if idx < layer.data.len:
             result = layer.data[idx]
+
+proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:int]=
+    var tileWidth = layer.tileSize.x
+    var tileHeight = layer.tileSize.y
+
+    let tm = layer.map
+    case tm.mOrientation:
+    of TileMapOrientation.staggeredX:
+        let offset = if tm.isStaggerIndexOdd: 0.0 else: 0.5
+
+        var x = position.x / tileWidth
+        var y = position.y / tileHeight
+        let xi = x.int
+        let yi = y.int
+        var cx = x - x.int.float + offset
+        var cy = y - y.int.float
+
+        let tileCoof = layer.tileSize.y / layer.tileSize.x
+        let topleft  = cx + cy >= tileCoof
+        let topright = cx - cy <= tileCoof
+        let botleft  = cy - cx <= tileCoof
+        let botright = cx + cy <= 1.0 + tileCoof
+
+        x = (xi * 2).float
+
+        if not topleft:
+            y -= 1.0
+            x -= 1.0
+
+        if not botleft:
+            x -= 1.0
+
+        if not topright:
+            y -= 1.0
+            x += 1.0
+
+        if not botright:
+            x += 1.0
+
+        result.x = x.int
+        result.y = y.int
+
+    else:
+        result.x = (position.x / tileWidth).int
+        result.y = (position.y / tileHeight).int
+
+proc tileAtPosition*(layer: TileMapLayer, position: Vector3): int=
+    let coords = layer.tileXYAtPosition(position)
+    result = layer.tileAtXY(coords.x, coords.y)
+
+proc tilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
+    result = @[]
+    for l in tm.layers:
+        if l of TileMapLayer:
+            result.add(l.TileMapLayer.tileAtPosition(position))
+
+proc visibleTilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
+    result = @[]
+    for l in tm.layers:
+        if l of TileMapLayer and l.enabled:
+            let r = l.TileMapLayer.tileAtPosition(position)
+            if r != 0:
+                result.add(r)
 
 method drawLayer(layer: TileMapLayer, tm: TileMap)=
     var r = tm.layerRect(layer)
     var worldLayerRect = newRect(newPoint(layer.node.worldPos().x, layer.node.worldPos().y), r.size)
     let viewRect = layer.getViewportRect()
 
-    if worldLayerRect.intersect(viewRect):
-        let (cols, cole, rows, rowe) = layer.getDrawRange(viewRect, tm.tileSize)
-        echo "rows ", rows, " rowe ", rowe
-        let mapWidth = tm.mapSize.width.int
-        var tileDrawRect = newRect(0.0, 0.0, 0.0, 0.0)
-        let camera = layer.node.sceneView.camera
+    # if worldLayerRect.intersect(viewRect):
+    let (cols, cole, rows, rowe) = layer.getDrawRange(viewRect, tm.tileSize)
 
-        for y in cols .. cole:
-            let mapWidthY = mapWidth * y
-            for x in rows .. rowe:
-                let pos = mapWidthY + x
+    let mapWidth = tm.mapSize.width.int
+    var tileDrawRect = newRect(0.0, 0.0, 0.0, 0.0)
+    let camera = layer.node.sceneView.camera
 
-                let tileId = layer.tileAtPosition(tm, x, y)
-                if tileId == 0: continue
+    for y in cols .. cole:
+        let mapWidthY = mapWidth * y
+        for x in rows .. rowe:
+            let pos = mapWidthY + x
 
-                tm.tileDrawRect(tm, pos, tileDrawRect)
+            let tileId = layer.tileAtXY(x, y)
+            if tileId == 0: continue
 
-                for tileSet in tm.tileSets:
-                    if tileSet.canDrawTile(tileId):
-                        tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
-                        break
+            tm.tileDrawRect(tm, pos, tileDrawRect)
+
+            for tileSet in tm.tileSets:
+                if tileSet.canDrawTile(tileId):
+                    tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
+                    break
 
 method draw*(tm: TileMap) =
     for layer in tm.layers:
@@ -309,6 +373,7 @@ tiledLayerCreators["tilelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer)
         layer.actualSize.miny = 0
         layer.actualSize.maxy = tm.mapSize.height.int
 
+    layer.tileSize = tm.tileSize
     layer.data = newSeq[int16](dataSize)
 
     var i = 0
@@ -406,6 +471,7 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                     continue
 
                 var layer = tm.layerCreator(jl, serializer)
+                layer.map = tm
                 let name = jl["name"].getStr()
                 let enabled = jl["visible"].getBVal()
                 let alpha = jl["opacity"].getFNum()
