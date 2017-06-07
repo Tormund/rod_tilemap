@@ -120,7 +120,8 @@ method canDrawTile(ts: BaseTileSet, tid: int): bool=
     result = tid >= ts.firstGid and tid < ts.firstGid + ts.tilesCount
 
 method canDrawTile(ts: TileCollection, tid: int): bool=
-    result = tid < ts.collection.len and not ts.collection[tid].isNil
+    let tid = tid - ts.firstGid
+    result = tid >= 0 and tid < ts.collection.len and not ts.collection[tid].isNil
 
 method drawTile(ts: BaseTileSet, tid: int, r: Rect, a: float) {.base.}=
     raise newException(Exception, "Abstract method called!")
@@ -132,7 +133,7 @@ method drawTile(ts: TileSheet, tid: int, r: Rect, a: float)=
     currentContext().drawImage(ts.sheet, r, newRect(tileX.float, tileY.float, ts.tileSize.x, ts.tileSize.y), a)
 
 method drawTile(ts: TileCollection, tid: int, r: Rect, a: float)=
-    let image = ts.collection[tid]
+    let image = ts.collection[tid - ts.firstGid]
     let imageSize = image.size
     var tr = r
     if imageSize.width.int != tr.width.int or imageSize.height.int != tr.height.int:
@@ -299,7 +300,8 @@ proc program(tm: TileMap): ProgramRef =
         tm.mProgram = c.gl.newShaderProgram(vertexShader, fragmentShader, { 0.GLuint: "aPosition"} )
     result = tm.mProgram
 
-method draw*(tm: TileMap) =
+method beforeDraw*(tm: TileMap, index: int): bool =
+    result = true # Prevent child nodes from drawing. We shall draw them.
     if tm.drawingRows.len == 0: return
 
     let c = currentContext()
@@ -340,8 +342,6 @@ method draw*(tm: TileMap) =
                 #let numQuads = min(tm.maxQuadsInRowDebug, numQuads)
 
                 gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
-
-        #if i == 5: break
 
 method getBBox*(tm: TileMap): BBox =
     result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
@@ -433,14 +433,14 @@ method getAllImages(ts: BaseTileSet, result: var seq[TidAndImage]) {.base.} =
 method getAllImages(ts: TileCollection, result: var seq[TidAndImage]) =
     for tid, image in ts.collection:
         if not image.isNil:
-            result.add((image, tid.int16))
+            result.add((image, int16(ts.firstGid + tid)))
 
-proc getQuadDataForTile(tm: TileMap, id: int16, quadData: var array[16, float32]): bool =
+proc getQuadDataForTile(tm: TileMap, id: int16, quadData: var array[16, float32]): bool {.inline.} =
     if id in tm.tileVCoords:
         quadData = tm.tileVCoords[id]
         result = true
 
-proc offsetVertexData(data: var array[16, float32], xOff, yOff: float32) =
+proc offsetVertexData(data: var array[16, float32], xOff, yOff: float32) {.inline.} =
     data[0] += xOff
     data[1] += yOff
     data[4] += xOff
@@ -450,14 +450,14 @@ proc offsetVertexData(data: var array[16, float32], xOff, yOff: float32) =
     data[12] += xOff
     data[13] += yOff
 
-proc addTileToVertexData(tm: TileMap, id: int16, xOff, yOff: float32, data: var seq[float32]): bool =
+proc addTileToVertexData(tm: TileMap, id: int16, xOff, yOff: float32, data: var seq[float32]): bool {.inline.} =
     var quadData: array[16, float32]
     result = tm.getQuadDataForTile(id, quadData)
     if result:
         offsetVertexData(quadData, xOff, yOff)
         data.add(quadData)
 
-proc updateWithVertexData(row: var DrawingRow, vertexData: openarray[float32]) =
+proc updateWithVertexData(row: var DrawingRow, vertexData: openarray[float32]) {.inline.} =
     let gl = currentContext().gl
     if row.vertexBuffer == invalidBuffer:
         row.vertexBuffer = gl.createBuffer()
@@ -680,18 +680,19 @@ proc loadTileSet(jTileSet: JsonNode, serializer: Serializer): BaseTileSet=
 
         tileCollection.tilesCount = jTileSet["tilecount"].getNum().int
         tileCollection.collection = @[]
+        tileCollection.firstGid = firstgid
 
         for k, v in jTileSet["tiles"]:
             closureScope:
-                let ii = parseInt(k) + firstgid
+                let i = parseInt(k)
 
                 deserializeImage(v["image"], serializer) do(img: Image, err: string):
                     checkLoadingErr(err)
 
-                    if ii > tileCollection.collection.len - 1:
-                        tileCollection.collection.setLen(ii + 1)
+                    if i >= tileCollection.collection.len:
+                        tileCollection.collection.setLen(i + 1)
 
-                    tileCollection.collection[ii] = img
+                    tileCollection.collection[i] = img
 
         result = tileCollection
 
