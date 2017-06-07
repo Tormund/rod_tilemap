@@ -1,9 +1,9 @@
 import rod / [ component, node, viewport, rod_types ]
 import rod / tools / [ serializer, debug_draw ]
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
-                render_to_image ]
+                render_to_image, rect_packer ]
 
-import json, tables, strutils, logging
+import json, tables, strutils, logging, sequtils, algorithm
 import opengl
 import nimx.assets.asset_loading
 
@@ -14,6 +14,7 @@ type
 
     BaseTileMapLayer = ref object of Component
         size: Size
+        offset: Size
         actualSize: LayerRange
         map: TileMap
 
@@ -44,17 +45,64 @@ type
         staggeredY
         hexagonal
 
+    DrawingRow = object
+        vertexBuffer: BufferRef
+        layerBreaks: seq[int]
+
     TileMap* = ref object of Component
         mapSize*: Size
         tileSize*: Vector3
         layers: seq[BaseTileMapLayer]
         tileSets: seq[BaseTileSet]
         tileDrawRect: proc(tm: TileMap, pos: int, tr: var Rect)
+        mQuadIndexBuffer: BufferRef
+        maxQuadsInRun: int
+        quadBufferLen: int
+        mProgram: ProgramRef
+        mTilesSpriteSheet: SelfContainedImage
+
+        tileVCoords: Table[int16, array[16, float32]]
+
+        drawingRows: seq[DrawingRow]
 
         case mOrientation: TileMapOrientation
         of TileMapOrientation.staggeredX, TileMapOrientation.staggeredY:
             isStaggerIndexOdd: bool
         else: discard
+
+        maxQuadsInRowDebug*: int
+
+    TidAndImage = tuple[image: Image, tid: int16]
+
+
+const vertexShader = """
+attribute vec4 aPosition;
+uniform mat4 uModelViewProjectionMatrix;
+varying vec2 vTexCoord;
+
+void main() {
+    vTexCoord = aPosition.zw;
+    gl_Position = uModelViewProjectionMatrix * vec4(aPosition.xy, 0, 1);
+}
+"""
+
+const fragmentShader = """
+#ifdef GL_ES
+#extension GL_OES_standard_derivatives : enable
+precision mediump float;
+#endif
+
+varying vec2 vTexCoord;
+uniform sampler2D texUnit;
+
+void main() {
+    gl_FragColor = texture2D(texUnit, vTexCoord);
+}
+"""
+
+method init*(tm: TileMap) =
+    procCall tm.Component.init()
+    tm.drawingRows = @[]
 
 proc position*(l: BaseTileMapLayer): Vector3=
     return l.node.position
@@ -236,10 +284,64 @@ method drawLayer(layer: TileMapLayer, tm: TileMap)=
                     tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
                     break
 
+proc quadIndexBuffer(tm: TileMap): BufferRef =
+    if tm.maxQuadsInRun > tm.quadBufferLen:
+        let c = currentContext()
+        if tm.mQuadIndexBuffer != invalidBuffer:
+            c.gl.deleteBuffer(tm.mQuadIndexBuffer)
+        tm.mQuadIndexBuffer = c.createQuadIndexBuffer(tm.maxQuadsInRun)
+        tm.quadBufferLen = tm.maxQuadsInRun
+    result = tm.mQuadIndexBuffer
+
+proc program(tm: TileMap): ProgramRef =
+    if tm.mProgram == invalidProgram:
+        let c = currentContext()
+        tm.mProgram = c.gl.newShaderProgram(vertexShader, fragmentShader, { 0.GLuint: "aPosition"} )
+    result = tm.mProgram
+
 method draw*(tm: TileMap) =
-    for layer in tm.layers:
-        if layer.enabled:
-            layer.drawLayer(tm)
+    if tm.drawingRows.len == 0: return
+
+    let c = currentContext()
+    let gl = c.gl
+    let program = tm.program
+    gl.useProgram(program)
+
+    gl.activeTexture(gl.TEXTURE0)
+    gl.uniform1i(gl.getUniformLocation(program, "texUnit"), 0)
+
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, "uModelViewProjectionMatrix"), false, c.transform)
+
+    let numLayers = tm.drawingRows[0].layerBreaks.len - 1
+
+    var quad: array[4, float32]
+    let tex = tm.mTilesSpriteSheet.getTextureQuad(gl, quad)
+
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+
+    gl.enableVertexAttribArray(saPosition.GLuint)
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, tm.quadIndexBuffer)
+
+    for iLayer in 0 ..< numLayers:
+        for i in 0 ..< tm.drawingRows.len:
+            assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
+            #echo "Drawing row: ", i, ", quads: ", tm.drawingRows[i].numberOfQuads
+
+            let quadStartIndex = tm.drawingRows[i].layerBreaks[iLayer]
+            let quadEndIndex = tm.drawingRows[i].layerBreaks[iLayer + 1]
+            let numQuads = quadEndIndex - quadStartIndex
+
+            if numQuads != 0:
+                const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
+                gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
+
+                #let numQuads = min(tm.maxQuadsInRowDebug, numQuads)
+
+                gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
+
+        #if i == 5: break
 
 method getBBox*(tm: TileMap): BBox =
     result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
@@ -321,6 +423,189 @@ proc `orientation=`*(tm: TileMap, val: TileMapOrientation)=
         tm.tileDrawRect = staggeredYTileRect
     else:
         tm.tileDrawRect = orthogonalTileRect
+
+proc containsRow(layer: BaseTileMapLayer, row: int): bool {.inline.} =
+    row >= layer.actualSize.miny and row < layer.actualSize.maxy
+
+method getAllImages(ts: BaseTileSet, result: var seq[TidAndImage]) {.base.} =
+    discard
+
+method getAllImages(ts: TileCollection, result: var seq[TidAndImage]) =
+    for tid, image in ts.collection:
+        if not image.isNil:
+            result.add((image, tid.int16))
+
+proc getQuadDataForTile(tm: TileMap, id: int16, quadData: var array[16, float32]): bool =
+    if id in tm.tileVCoords:
+        quadData = tm.tileVCoords[id]
+        result = true
+
+proc offsetVertexData(data: var array[16, float32], xOff, yOff: float32) =
+    data[0] += xOff
+    data[1] += yOff
+    data[4] += xOff
+    data[5] += yOff
+    data[8] += xOff
+    data[9] += yOff
+    data[12] += xOff
+    data[13] += yOff
+
+proc addTileToVertexData(tm: TileMap, id: int16, xOff, yOff: float32, data: var seq[float32]): bool =
+    var quadData: array[16, float32]
+    result = tm.getQuadDataForTile(id, quadData)
+    if result:
+        offsetVertexData(quadData, xOff, yOff)
+        data.add(quadData)
+
+proc updateWithVertexData(row: var DrawingRow, vertexData: openarray[float32]) =
+    let gl = currentContext().gl
+    if row.vertexBuffer == invalidBuffer:
+        row.vertexBuffer = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, row.vertexBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW)
+
+proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
+    let tileY = index div 2
+    let odd = index mod 2 # 1 if row is odd, 0 otherwise
+
+    if row.layerBreaks.isNil:
+        row.layerBreaks = @[]
+    else:
+        row.layerBreaks.setLen(0)
+
+    var vertexData = newSeq[float32]()
+
+    #echo "rebuildRow: ", index, ", tileY: ", tileY
+
+    let yOffBase = Coord(index) * tm.tileSize.y / 2
+
+    template addLayerBreak() =
+        let quadsInRowSoFar = vertexData.len div 16
+        row.layerBreaks.add(quadsInRowSoFar)
+        if quadsInRowSoFar > 0:
+            let quadsInRun = row.layerBreaks[^1] - row.layerBreaks[^2]
+            if quadsInRun > tm.maxQuadsInRun:
+                tm.maxQuadsInRun = quadsInRun
+
+    for layerIndex, layer in tm.layers:
+        if layer.enabled and layer of TileMapLayer:
+            addLayerBreak()
+            if layer.containsRow(tileY):
+                let tml = TileMapLayer(layer)
+                let maxx = tml.actualSize.maxx
+                let layerWidth = maxx - tml.actualSize.minx
+                let layerStartOdd = tml.actualSize.minx mod 2 # 1 if row is odd, 0 otherwise
+                var tilesInLayerRow = layerWidth div 2
+                #echo "layer: ", layer.name, ":" , tml.actualSize, ", tilesInLayerRow: ", tilesInLayerRow
+
+                let tileYInLayer = tileY - tml.actualSize.miny
+
+                let yOff = yOffBase + tml.offset.height
+
+                #for i in 0 ..< tilesInLayerRow:
+                var i = tml.actualSize.minx
+                if layerStartOdd != odd:
+                    inc i
+
+                while i < maxx:
+                    let tileX = i - tml.actualSize.minx # * 2 + odd + layerStartOdd
+                    let tileIdx = tileYInLayer * layerWidth + tileX
+                    #echo "tileYInLayer: ", tileYInLayer, ", tileX: ", tileX, ", idx: ", tileIdx
+                    let tile = tml.data[tileIdx]
+
+                    let xOff = Coord(tileX + tml.actualSize.minx) * tm.tileSize.x / 2 + tml.offset.width
+                    #echo "xOff: ", xOff
+
+                    if tile != 0:
+                        if not tm.addTileToVertexData(tile, xOff, yOff, vertexData):
+                            echo "TILE NOT ADDED"
+                            discard
+
+                    i += 2
+
+    addLayerBreak()
+    row.updateWithVertexData(vertexData)
+
+proc rebuildRow(tm: TileMap, row: int) =
+    if tm.drawingRows.len <= row:
+        tm.drawingRows.setLen(row + 1)
+    tm.rebuildRow(tm.drawingRows[row], row)
+
+proc packAllTilesToSheet(tm: TileMap) =
+    tm.tileVCoords = initTable[int16, array[16, float32]]()
+    var allImages = newSeq[TidAndImage]()
+    for ts in tm.tileSets:
+        ts.getAllImages(allImages)
+
+    allImages.keepItIf:
+        let sz = it.image.size
+        sz.width < 700 and sz.height < 400
+
+    allImages.sort() do(i1, i2: TidAndImage) -> int:
+        let sz1 = i1.image.size
+        let sz2 = i2.image.size
+        cmp(sz1.width * sz1.height, sz2.width * sz2.height)
+
+    let texWidth = 4086
+    let texHeight = 4086
+
+    tm.mTilesSpriteSheet = imageWithSize(newSize(texWidth.Coord, texHeight.Coord))
+
+    var gfs: GlFrameState
+    beginDraw(tm.mTilesSpriteSheet, gfs)
+    let c = currentContext()
+    c.withTransform ortho(0, texWidth.Coord, 0, texHeight.Coord, -1, 1):
+        var rp = newPacker(texWidth.int32, texHeight.int32)
+        for i in allImages:
+            #echo "Packing image: ", i.image.filePath
+            let img = i.image
+            let sz = img.size
+            #echo "size: ", sz
+            assert(sz.width > 2)
+            assert(sz.height > 2)
+
+            let p = rp.pack(sz.width.int32, sz.height.int32)
+            assert(p.hasSpace)
+
+            #echo "pos: ", p
+
+            var r: Rect
+            r.origin.x = Coord(p.x)
+            r.origin.y = Coord(p.y)
+            r.size = sz
+            c.drawImage(img, r)
+
+            let yOff = tm.tileSize.y - sz.height
+
+            var coords: array[16, float32]
+            coords[0] = 0
+            coords[1] = 0 + yOff
+            coords[2] = p.x / texWidth
+            coords[3] = p.y / texHeight
+
+            coords[4] = 0
+            coords[5] = sz.height + yOff
+            coords[6] = p.x / texWidth
+            coords[7] = (p.y.Coord + sz.height) / texHeight.Coord
+
+            coords[8] = sz.width
+            coords[9] = sz.height + yOff
+            coords[10] = (p.x.Coord + sz.width) / texWidth.Coord
+            coords[11] = (p.y.Coord + sz.height) / texHeight.Coord
+
+            coords[12] = sz.width
+            coords[13] = 0 + yOff
+            coords[14] = (p.x.Coord + sz.width) / texWidth.Coord
+            coords[15] = p.y / texHeight
+            tm.tileVCoords[i.tid] = coords
+    endDraw(tm.mTilesSpriteSheet, gfs)
+    tm.mTilesSpriteSheet.generateMipmap(c.gl)
+
+proc rebuildAllRows(tm: TileMap) =
+    tm.packAllTilesToSheet()
+    let numRows = tm.mapSize.height.int * 2
+    for i in 0 ..< numRows:
+        tm.rebuildRow(i)
 
 #todo: serialize support
 # method deserialize*(c: TileMap, j: JsonNode, serealizer: Serializer) =
@@ -436,7 +721,9 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
 
         let serializer = new(Serializer)
         serializer.url = url
-        serializer.onComplete = onComplete
+        serializer.onComplete = proc () =
+            tm.rebuildAllRows()
+            if not onComplete.isNil: onComplete()
 
         if "orientation" in jtm:
             try:
@@ -480,6 +767,8 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                     position.x = jl["offsetx"].getFNum()
                 if "offsety" in jl:
                     position.y = jl["offsety"].getFNum()
+
+                layer.offset = newSize(position.x, position.y)
 
                 var layerNode = newNode(name)
                 layerNode.position = position
