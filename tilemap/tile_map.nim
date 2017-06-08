@@ -685,7 +685,6 @@ proc rebuildAllRows(tm: TileMap) =
     let numRows = tm.mapSize.height.int * 2
     for i in 0 ..< numRows:
         tm.rebuildRow(i)
-    echo "rebuildAllRows"
 
 proc rebuildAllRowsIfNeeded(tm: TileMap) =
     var enabledLayers = newBoolSeq()
