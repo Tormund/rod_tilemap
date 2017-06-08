@@ -1,11 +1,12 @@
 import rod / [ component, node, viewport, rod_types ]
+import rod / component / [ sprite ]
 import rod / tools / [ serializer, debug_draw ]
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
                 render_to_image, rect_packer ]
 
 import json, tables, strutils, logging, sequtils, algorithm
-import opengl
 import nimx.assets.asset_loading
+import boolseq
 
 type
     LayerRange = tuple
@@ -47,7 +48,10 @@ type
 
     DrawingRow = object
         vertexBuffer: BufferRef
-        layerBreaks: seq[int]
+        vboLayerBreaks: seq[int]
+
+        objects: seq[Node]
+        objectLayerBreaks: seq[int]
 
     TileMap* = ref object of Component
         mapSize*: Size
@@ -60,6 +64,7 @@ type
         quadBufferLen: int
         mProgram: ProgramRef
         mTilesSpriteSheet: SelfContainedImage
+        enabledLayers: BoolSeq
 
         tileVCoords: Table[int16, array[16, float32]]
 
@@ -69,8 +74,6 @@ type
         of TileMapOrientation.staggeredX, TileMapOrientation.staggeredY:
             isStaggerIndexOdd: bool
         else: discard
-
-        maxQuadsInRowDebug*: int
 
     TidAndImage = tuple[image: Image, tid: int16]
 
@@ -99,6 +102,8 @@ void main() {
     gl_FragColor = texture2D(texUnit, vTexCoord);
 }
 """
+
+proc rebuildAllRowsIfNeeded(tm: TileMap)
 
 method init*(tm: TileMap) =
     procCall tm.Component.init()
@@ -300,10 +305,7 @@ proc program(tm: TileMap): ProgramRef =
         tm.mProgram = c.gl.newShaderProgram(vertexShader, fragmentShader, { 0.GLuint: "aPosition"} )
     result = tm.mProgram
 
-method beforeDraw*(tm: TileMap, index: int): bool =
-    result = true # Prevent child nodes from drawing. We shall draw them.
-    if tm.drawingRows.len == 0: return
-
+proc prepareVBOs(tm: TileMap) =
     let c = currentContext()
     let gl = c.gl
     let program = tm.program
@@ -314,8 +316,6 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
     gl.uniformMatrix4fv(gl.getUniformLocation(program, "uModelViewProjectionMatrix"), false, c.transform)
 
-    let numLayers = tm.drawingRows[0].layerBreaks.len - 1
-
     var quad: array[4, float32]
     let tex = tm.mTilesSpriteSheet.getTextureQuad(gl, quad)
 
@@ -324,24 +324,72 @@ method beforeDraw*(tm: TileMap, index: int): bool =
     gl.enableVertexAttribArray(saPosition.GLuint)
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, tm.quadIndexBuffer)
 
-    for iLayer in 0 ..< numLayers:
-        for i in 0 ..< tm.drawingRows.len:
-            assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
-            #echo "Drawing row: ", i, ", quads: ", tm.drawingRows[i].numberOfQuads
+method beforeDraw*(tm: TileMap, index: int): bool =
+    result = true # Prevent child nodes from drawing. We shall draw them.
+    if tm.drawingRows.len == 0: return
 
-            let quadStartIndex = tm.drawingRows[i].layerBreaks[iLayer]
-            let quadEndIndex = tm.drawingRows[i].layerBreaks[iLayer + 1]
-            let numQuads = quadEndIndex - quadStartIndex
+    tm.rebuildAllRowsIfNeeded()
 
-            if numQuads != 0:
-                const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
+    let c = currentContext()
+    let gl = c.gl
 
-                gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
-                gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
+    var vboStateValid = false
+    var iTileLayer = 0
 
-                #let numQuads = min(tm.maxQuadsInRowDebug, numQuads)
+    for layer in tm.layers:
+        if layer.node.enabled:
+            if layer of TileMapLayer:
+                for i in 0 ..< tm.drawingRows.len:
+                    assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
+                    #echo "Drawing row: ", i, ", quads: ", tm.drawingRows[i].numberOfQuads
 
-                gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
+                    let quadStartIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer]
+                    let quadEndIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer + 1]
+                    let numQuads = quadEndIndex - quadStartIndex
+
+                    if numQuads != 0:
+                        if not vboStateValid:
+                            tm.prepareVBOs()
+                            vboStateValid = true
+
+                        const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
+
+                        gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
+                        gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
+
+                        gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
+
+                    let objectStartIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer]
+                    let objectEndIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]
+                    let numObjects = objectEndIndex - objectStartIndex
+
+                    if numObjects != 0:
+                        vboStateValid = false
+                        for iObj in objectStartIndex ..< objectEndIndex:
+                            tm.drawingRows[i].objects[iObj].recursiveDraw()
+                inc iTileLayer
+
+            elif layer of ImageMapLayer:
+                let iml = ImageMapLayer(layer)
+                if not iml.image.isNil:
+                    vboStateValid = false
+                    var r: Rect
+                    r.size = iml.image.size
+                    r.origin = newPoint(iml.node.position.x, iml.node.position.y)
+                    c.drawImage(iml.image, r)
+
+method imageForTile(ts: BaseTileSet, tid: int16): Image {.base.} = discard
+
+method imageForTile(ts: TileCollection, tid: int16): Image =
+    let tid = tid - ts.firstGid
+    if tid >= 0 and tid < ts.collection.len:
+        return ts.collection[tid]
+
+proc imageForTile(tm: TileMap, tid: int16): Image =
+    for ts in tm.tileSets:
+        result = ts.imageForTile(tid)
+        if not result.isNil:
+            return
 
 method getBBox*(tm: TileMap): BBox =
     result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
@@ -457,6 +505,15 @@ proc addTileToVertexData(tm: TileMap, id: int16, xOff, yOff: float32, data: var 
         offsetVertexData(quadData, xOff, yOff)
         data.add(quadData)
 
+proc createObjectForTile(tm: TileMap, id: int16, xOff, yOff: float32): Node =
+    let i = tm.imageForTile(id)
+    if not i.isNil:
+        result = newNode()
+        let s = result.component(Sprite)
+        s.image = i
+        let yOff = tm.tileSize.y - i.size.height + yOff
+        result.position = newVector3(xOff, yOff)
+
 proc updateWithVertexData(row: var DrawingRow, vertexData: openarray[float32]) {.inline.} =
     let gl = currentContext().gl
     if row.vertexBuffer == invalidBuffer:
@@ -468,10 +525,15 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
     let tileY = index div 2
     let odd = index mod 2 # 1 if row is odd, 0 otherwise
 
-    if row.layerBreaks.isNil:
-        row.layerBreaks = @[]
+    if row.vboLayerBreaks.isNil:
+        row.vboLayerBreaks = @[]
     else:
-        row.layerBreaks.setLen(0)
+        row.vboLayerBreaks.setLen(0)
+
+    if row.objectLayerBreaks.isNil:
+        row.objectLayerBreaks = @[]
+    else:
+        row.objectLayerBreaks.setLen(0)
 
     var vertexData = newSeq[float32]()
 
@@ -481,11 +543,14 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
 
     template addLayerBreak() =
         let quadsInRowSoFar = vertexData.len div 16
-        row.layerBreaks.add(quadsInRowSoFar)
+        row.vboLayerBreaks.add(quadsInRowSoFar)
         if quadsInRowSoFar > 0:
-            let quadsInRun = row.layerBreaks[^1] - row.layerBreaks[^2]
+            let quadsInRun = row.vboLayerBreaks[^1] - row.vboLayerBreaks[^2]
             if quadsInRun > tm.maxQuadsInRun:
                 tm.maxQuadsInRun = quadsInRun
+
+        let objectsInRowSoFar = row.objects.len
+        row.objectLayerBreaks.add(objectsInRowSoFar)
 
     for layerIndex, layer in tm.layers:
         if layer.enabled and layer of TileMapLayer:
@@ -518,8 +583,13 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
 
                     if tile != 0:
                         if not tm.addTileToVertexData(tile, xOff, yOff, vertexData):
-                            echo "TILE NOT ADDED"
-                            discard
+                            let n = tm.createObjectForTile(tile, xOff, yOff)
+                            if not n.isNil:
+                                layer.node.addChild(n)
+                                if row.objects.isNil: row.objects = @[]
+                                row.objects.add(n)
+                            else:
+                                echo "TILE NOT FOUND: ", tile
 
                     i += 2
 
@@ -537,9 +607,12 @@ proc packAllTilesToSheet(tm: TileMap) =
     for ts in tm.tileSets:
         ts.getAllImages(allImages)
 
+    const maxWidth = 700
+    const maxHeight = 400
+
     allImages.keepItIf:
         let sz = it.image.size
-        sz.width < 700 and sz.height < 400
+        sz.width < maxWidth and sz.height < maxHeight
 
     allImages.sort() do(i1, i2: TidAndImage) -> int:
         let sz1 = i1.image.size
@@ -602,10 +675,18 @@ proc packAllTilesToSheet(tm: TileMap) =
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
 
 proc rebuildAllRows(tm: TileMap) =
-    tm.packAllTilesToSheet()
     let numRows = tm.mapSize.height.int * 2
     for i in 0 ..< numRows:
         tm.rebuildRow(i)
+
+proc rebuildAllRowsIfNeeded(tm: TileMap) =
+    var enabledLayers = newBoolSeq()
+    enabledLayers.setLen(tm.layers.len)
+    for i, layer in tm.layers:
+        enabledLayers[i] = layer of TileMapLayer and layer.node.enabled
+    if tm.enabledLayers.isNil or fastCmp(enabledLayers, tm.enabledLayers) != 0:
+        swap(enabledLayers, tm.enabledLayers)
+        tm.rebuildAllRows()
 
 #todo: serialize support
 # method deserialize*(c: TileMap, j: JsonNode, serealizer: Serializer) =
@@ -723,7 +804,8 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
         let serializer = new(Serializer)
         serializer.url = url
         serializer.onComplete = proc () =
-            tm.rebuildAllRows()
+            tm.packAllTilesToSheet()
+            tm.rebuildAllRowsIfNeeded()
             if not onComplete.isNil: onComplete()
 
         if "orientation" in jtm:
