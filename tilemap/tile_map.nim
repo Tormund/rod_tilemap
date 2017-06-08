@@ -195,6 +195,11 @@ proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
     result.minx = (r.y / ts.y).int
     result.maxx = ((r.y + r.height) / ts.y).int
 
+proc layerByName*[T](tm: TileMap, name: string): T =
+    for l in tm.layers:
+        if l.name == name and l of T:
+            return l.T
+
 proc tileAtXY*(layer: TileMapLayer, x, y: int): int=
     if (x >= layer.actualSize.minx and x < layer.actualSize.maxx) and (y >= layer.actualSize.miny and y < layer.actualSize.maxy):
 
@@ -246,7 +251,7 @@ proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:i
         result.y = (position.y / tileHeight).int
 
 proc tileAtPosition*(layer: TileMapLayer, position: Vector3): int=
-    let coords = layer.tileXYAtPosition(position)
+    let coords = layer.tileXYAtPosition(position + layer.position)
     result = layer.tileAtXY(coords.x, coords.y)
 
 proc tilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
@@ -680,13 +685,15 @@ proc rebuildAllRows(tm: TileMap) =
     let numRows = tm.mapSize.height.int * 2
     for i in 0 ..< numRows:
         tm.rebuildRow(i)
+    echo "rebuildAllRows"
 
 proc rebuildAllRowsIfNeeded(tm: TileMap) =
     var enabledLayers = newBoolSeq()
     enabledLayers.setLen(tm.layers.len)
     for i, layer in tm.layers:
         enabledLayers[i] = layer of TileMapLayer and layer.node.enabled
-    if tm.enabledLayers.isNil or fastCmp(enabledLayers, tm.enabledLayers) != 0:
+
+    if enabledLayers != tm.enabledLayers:
         swap(enabledLayers, tm.enabledLayers)
         tm.rebuildAllRows()
 
