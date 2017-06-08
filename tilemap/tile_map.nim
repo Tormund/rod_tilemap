@@ -4,7 +4,7 @@ import rod / tools / [ serializer, debug_draw ]
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
                 render_to_image, rect_packer ]
 
-import json, tables, strutils, logging, sequtils, algorithm
+import json, tables, strutils, logging, sequtils, algorithm, math
 import nimx.assets.asset_loading
 import boolseq
 
@@ -619,8 +619,10 @@ proc packAllTilesToSheet(tm: TileMap) =
         let sz2 = i2.image.size
         cmp(sz1.width * sz1.height, sz2.width * sz2.height)
 
-    let texWidth = 4086
-    let texHeight = 4086
+    let texWidth = 2048
+    let texHeight = 4096
+
+    assert(isPowerOfTwo(texWidth) and isPowerOfTwo(texHeight))
 
     tm.mTilesSpriteSheet = imageWithSize(newSize(texWidth.Coord, texHeight.Coord))
 
