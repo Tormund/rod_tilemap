@@ -221,7 +221,7 @@ proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:i
         var cx = x - x.int.float + offset
         var cy = y - y.int.float
 
-        let tileCoof = tileWidth / tileHeight
+        let tileCoof = tileHeight / tileWidth
         let topleft  = cx + cy >= tileCoof
         let topright = cx - cy <= tileCoof
         let botleft  = cy - cx <= tileCoof
@@ -268,7 +268,16 @@ proc visibleTilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
             if r != 0:
                 result.add(r)
 
-method drawLayer(layer: TileMapLayer, tm: TileMap)=
+proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple[layerName: string, x: int, y: int, tileid: int]]=
+    result = @[]
+    for l in tm.layers:
+        if l of TileMapLayer and l.enabled:
+            let coords = l.TileMapLayer.tileXYAtPosition(position + l.position)
+            let tileid = l.TileMapLayer.tileAtXY(coords.x, coords.y)
+            if tileid != 0:
+                result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid))
+
+method drawLayer(layer: TileMapLayer, tm: TileMap) {.deprecated.}=
     var r = tm.layerRect(layer)
     var worldLayerRect = newRect(newPoint(layer.node.worldPos().x, layer.node.worldPos().y), r.size)
     let viewRect = layer.getViewportRect()
