@@ -251,7 +251,7 @@ proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:i
         result.y = (position.y / tileHeight).int
 
 proc tileAtPosition*(layer: TileMapLayer, position: Vector3): int=
-    let coords = layer.tileXYAtPosition(position + layer.position)
+    let coords = layer.tileXYAtPosition(position - layer.position)
     result = layer.tileAtXY(coords.x, coords.y)
 
 proc tilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
@@ -272,7 +272,7 @@ proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple
     result = @[]
     for l in tm.layers:
         if l of TileMapLayer and l.enabled:
-            let coords = l.TileMapLayer.tileXYAtPosition(position + l.position)
+            let coords = l.TileMapLayer.tileXYAtPosition(position - l.position)
             let tileid = l.TileMapLayer.tileAtXY(coords.x, coords.y)
             if tileid != 0:
                 result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid))
@@ -390,7 +390,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                     var r: Rect
                     r.size = iml.image.size
                     r.origin = newPoint(iml.node.position.x, iml.node.position.y)
-                    c.drawImage(iml.image, r)
+                    c.drawImage(iml.image, r, alpha = iml.node.alpha)
 
 method imageForTile(ts: BaseTileSet, tid: int16): Image {.base.} = discard
 
