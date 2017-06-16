@@ -399,7 +399,7 @@ method imageForTile(ts: TileCollection, tid: int16): Image =
     if tid >= 0 and tid < ts.collection.len:
         return ts.collection[tid]
 
-proc imageForTile(tm: TileMap, tid: int16): Image =
+proc imageForTile*(tm: TileMap, tid: int16): Image =
     for ts in tm.tileSets:
         result = ts.imageForTile(tid)
         if not result.isNil:
