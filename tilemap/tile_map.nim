@@ -13,11 +13,42 @@ type
         minx, maxx: int
         miny, maxy: int
 
+    LayerPropertyType* = enum
+        lptString = "string"
+        lptFloat = "float"
+        lptInt = "int"
+        lptBool = "bool"
+        lptColor = "color"
+        lptFile = "file"
+
+    LayerProperty* = ref object
+        case kind*: LayerPropertyType:
+            of lptString:
+                strVal*: string
+            of lptFloat:
+                floatVal*: float
+            of lptInt:
+                intVal*: int
+            of lptBool:
+                boolVal*: bool
+            of lptColor:
+                colorVal*: Color
+            of lptFile:
+                fileVal*: string
+
+    TileMapLayerProperty* = object
+        property*: LayerProperty
+        layer*: BaseTileMapLayer
+
+    TileMapLayerPropertyCollection = object
+        collection: seq[TileMapLayerProperty]
+
     BaseTileMapLayer = ref object of Component
         size: Size
         offset: Size
         actualSize: LayerRange
         map: TileMap
+        properties: Table[string, LayerProperty]
 
     TileMapLayer* = ref object of BaseTileMapLayer
         data*: seq[int16]
@@ -67,6 +98,7 @@ type
         enabledLayers: BoolSeq
 
         tileVCoords: Table[int16, array[16, float32]]
+        properties: Table[string, TileMapLayerPropertyCollection]
 
         drawingRows: seq[DrawingRow]
 
@@ -76,6 +108,32 @@ type
         else: discard
 
     TidAndImage = tuple[image: Image, tid: int16]
+
+
+proc newLayerProperty(kind: LayerPropertyType, value: JsonNode): LayerProperty =
+    case kind:
+        of lptString:
+            result = LayerProperty(kind: lptString, strVal: value.getStr())
+        of lptFloat:
+            result = LayerProperty(kind: lptFloat, floatVal: value.getFNum())
+        of lptInt:
+            result = LayerProperty(kind: lptInt, intVal: value.getNum().int)
+        of lptBool:
+            result = LayerProperty(kind: lptBool, boolVal: value.getBVal())
+        of lptColor:
+            let color = value.getStr()
+            let a = color[1..2].parseHexInt().float / 255.0
+            let r = color[3..4].parseHexInt().float
+            let g = color[5..6].parseHexInt().float
+            let b = color[7..8].parseHexInt().float
+            result = LayerProperty(kind: lptColor, colorVal: newColor(r, g, b, a))
+        of lptFile:
+            result = LayerProperty(kind: lptFile, fileVal: value.getStr())
+
+
+iterator pairs*(c: TileMapLayerPropertyCollection): (LayerProperty, BaseTileMapLayer) =
+    for item in c.collection:
+        yield (item.property, item.layer)
 
 
 const vertexShader = """
@@ -404,6 +462,35 @@ proc imageForTile(tm: TileMap, tid: int16): Image =
         result = ts.imageForTile(tid)
         if not result.isNil:
             return
+
+proc layersForPropertyName*(tm: TileMap, key: string): seq[TileMapLayerProperty] =
+    if key in tm.properties:
+        result = tm.properties[key].collection
+    else:
+        result = @[]
+
+proc layersForPropertyValue*[T](tm: TileMap, key: string, value: T): seq[BaseTileMapLayer] =
+    result = @[]
+    for property, layer in tm.layersForPropertyName():
+        case property.kind:
+            of lptString:
+                if T == string and property.strVal == value:
+                    result.add(layer)
+            of lptInt:
+                if T == int and property.intVal == value:
+                    result.add(layer)
+            of lptFloat:
+                if T == float and property.floatVal == value:
+                    result.add(layer)
+            of lptBool:
+                if T == bool and property.boolVal == value:
+                    result.add(layer)
+            of lptColor:
+                if T == Color and property.colorVal == value:
+                    result.add(layer)
+            of lptFile:
+                if T == string and property.fileVal == value:
+                    result.add(layer)
 
 method getBBox*(tm: TileMap): BBox =
     result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
@@ -883,6 +970,21 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                 layer.node = layerNode
                 tm.node.addChild(layerNode)
                 tm.layers.add(layer)
+
+                if "propertytypes" in jl and "properties" in jl:
+                    layer.properties = initTable[string, LayerProperty](jl["propertytypes"].len)
+
+                    for key, value in jl["propertytypes"]:
+                        if key in jl["properties"]:
+                            let kind = parseEnum[LayerPropertyType](value.getStr())
+                            let property = newLayerProperty(kind, jl["properties"][key])
+                            layer.properties[key] = property
+
+                            let mapProperty = TileMapLayerProperty(layer: layer, property: property)
+                            if not (key in tm.properties):
+                                tm.properties[key] = TileMapLayerPropertyCollection(collection: @[])
+                            tm.properties[key].collection.add(mapProperty)
+                                
 
         if "tilesets" in jtm:
             tm.tileSets = @[]
