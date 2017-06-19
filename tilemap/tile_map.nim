@@ -457,7 +457,7 @@ method imageForTile(ts: TileCollection, tid: int16): Image =
     if tid >= 0 and tid < ts.collection.len:
         return ts.collection[tid]
 
-proc imageForTile(tm: TileMap, tid: int16): Image =
+proc imageForTile*(tm: TileMap, tid: int16): Image =
     for ts in tm.tileSets:
         result = ts.imageForTile(tid)
         if not result.isNil:
@@ -934,26 +934,36 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
 
         if "layers" in jtm:
             tm.layers = @[]
-            for jl in jtm["layers"]:
+
+            proc parseLayer(tm: TileMap, jl: JsonNode, pos: Vector3 = newVector3(), visible = true)=
                 let layerType = jl["type"].getStr()
                 let layerCreator = tiledLayerCreators.getOrDefault(layerType)
 
-                if layerCreator.isNil:
-                    warn "TileMap loadTiled: ", layerType, " doesn't supported!"
-                    continue
-
-                var layer = tm.layerCreator(jl, serializer)
-                layer.map = tm
-                let name = jl["name"].getStr()
-                let enabled = jl["visible"].getBVal()
-                let alpha = jl["opacity"].getFNum()
-
-                layer.size = newSize(jl["width"].getFNum(), jl["height"].getFNum())
                 var position = newVector3()
                 if "offsetx" in jl:
                     position.x = jl["offsetx"].getFNum()
                 if "offsety" in jl:
                     position.y = jl["offsety"].getFNum()
+
+                position += pos
+
+                let enabled = if visible: jl["visible"].getBVal() else: false
+
+                if layerCreator.isNil:
+                    if "layers" in jl:
+                        for jLayer in jl["layers"]:
+                            tm.parseLayer(jLayer, position, enabled)
+                    else:
+                        warn "TileMap loadTiled: ", layerType, " doesn't supported!"
+                    return
+
+                var layer = tm.layerCreator(jl, serializer)
+                layer.map = tm
+                let name = jl["name"].getStr()
+
+                let alpha = jl["opacity"].getFNum()
+
+                layer.size = newSize(jl["width"].getFNum(), jl["height"].getFNum())
 
                 layer.offset = newSize(position.x, position.y)
 
@@ -985,6 +995,8 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                                 tm.properties[key] = TileMapLayerPropertyCollection(collection: @[])
                             tm.properties[key].collection.add(mapProperty)
                                 
+            for jl in jtm["layers"]:
+                tm.parseLayer(jl)
 
         if "tilesets" in jtm:
             tm.tileSets = @[]
