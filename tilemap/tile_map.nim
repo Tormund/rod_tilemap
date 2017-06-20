@@ -13,9 +13,9 @@ type
         minx, maxx: int
         miny, maxy: int
 
-    BaseTileMapLayer = ref object of Component
+    BaseTileMapLayer* = ref object of Component
         size: Size
-        offset: Size
+        offset*: Size
         actualSize: LayerRange
         map: TileMap
 
@@ -194,6 +194,42 @@ proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
 
     result.minx = (r.y / ts.y).int
     result.maxx = ((r.y + r.height) / ts.y).int
+
+
+proc layerIndexByName*(tm: TileMap, name: string): int =
+    result = -1
+    for i, l in tm.layers:
+        if l.name == name:
+            return i
+
+proc insertLayer*(tm: TileMap, layerNode: Node, idx: int, layerWidth: int = 0)=
+    var layer = layerNode.componentIfAvailable(TileMapLayer).BaseTileMapLayer
+    if layer.isNil:
+        layer = layerNode.componentIfAvailable(ImageMapLayer).BaseTileMapLayer
+
+    if not layer.isNil:
+        if layer of TileMapLayer:
+            let lWidth = if layerWidth == 0: tm.mapSize.width.int else: layerWidth
+            layer.actualSize.minx = 0
+            layer.actualSize.miny = 0
+            layer.actualSize.maxx = lWidth
+            layer.actualSize.maxy = layer.TileMapLayer.data.len div lWidth
+        layer.map = tm
+        tm.node.addChild(layerNode)
+        tm.layers.insert(layer, idx)
+        if tm.drawingRows.len > 0:
+            tm.rebuildAllRowsIfNeeded()
+
+proc addLayer*(tm: TileMap, layerNode: Node, layerWidth: int = 0)=
+    tm.insertLayer(layerNode, layerWidth, tm.layers.len)
+
+proc removeLayer*(tm: TileMap, name: string)=
+    for i, l in tm.layers:
+        if l.name == name:
+            tm.layers.del(i)
+            l.node.removeFromParent()
+            tm.rebuildAllRowsIfNeeded()
+            return
 
 proc layerByName*[T](tm: TileMap, name: string): T =
     for l in tm.layers:
