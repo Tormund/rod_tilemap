@@ -139,9 +139,6 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
                 layer["actualSize"] = actualSize
 
             layer["data"] = newData
-
-    echo "PREPARED ", layers.len
-
     jNode["layers"] = layers
 
 
