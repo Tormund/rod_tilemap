@@ -167,6 +167,9 @@ uniform sampler2D texUnit;
 
 void main() {
     gl_FragColor = texture2D(texUnit, vTexCoord);
+    float a = gl_FragColor.a;
+    a = clamp(step(0.49, gl_FragColor.a) + a, 0.0, 1.0);
+    gl_FragColor.a = a;
 }
 """
 
@@ -749,6 +752,8 @@ proc packAllTilesToSheet(tm: TileMap) =
     var gfs: GlFrameState
     beginDraw(tm.mTilesSpriteSheet, gfs)
     let c = currentContext()
+    let gl = c.gl
+    gl.blendFunc(gl.ONE, gl.ZERO)
     c.withTransform ortho(0, texWidth.Coord, 0, texHeight.Coord, -1, 1):
         var rp = newPacker(texWidth.int32, texHeight.int32)
         for i in allImages:
@@ -772,29 +777,34 @@ proc packAllTilesToSheet(tm: TileMap) =
 
             let yOff = tm.tileSize.y - sz.height
 
+            const dv = -1.0
+            const d = 0.5
+
             var coords: array[16, float32]
-            coords[0] = 0
-            coords[1] = 0 + yOff
-            coords[2] = p.x / texWidth
-            coords[3] = p.y / texHeight
+            coords[0] = dv
+            coords[1] = dv + yOff
+            coords[2] = (p.x.Coord + d) / texWidth.Coord
+            coords[3] = (p.y.Coord + d) / texHeight.Coord
 
-            coords[4] = 0
-            coords[5] = sz.height + yOff
-            coords[6] = p.x / texWidth
-            coords[7] = (p.y.Coord + sz.height) / texHeight.Coord
+            coords[4] = dv
+            coords[5] = sz.height + yOff - dv
+            coords[6] = (p.x.Coord + d) / texWidth.Coord
+            coords[7] = (p.y.Coord + sz.height - d) / texHeight.Coord
 
-            coords[8] = sz.width
-            coords[9] = sz.height + yOff
-            coords[10] = (p.x.Coord + sz.width) / texWidth.Coord
-            coords[11] = (p.y.Coord + sz.height) / texHeight.Coord
+            coords[8] = sz.width - dv
+            coords[9] = sz.height + yOff - dv
+            coords[10] = (p.x.Coord + sz.width - d) / texWidth.Coord
+            coords[11] = (p.y.Coord + sz.height - d) / texHeight.Coord
 
-            coords[12] = sz.width
-            coords[13] = 0 + yOff
-            coords[14] = (p.x.Coord + sz.width) / texWidth.Coord
-            coords[15] = p.y / texHeight
+            coords[12] = sz.width - dv
+            coords[13] = 0 + yOff + dv
+            coords[14] = (p.x.Coord + sz.width - d) / texWidth.Coord
+            coords[15] = (p.y.Coord + d) / texHeight.Coord
             tm.tileVCoords[i.tid] = coords
     endDraw(tm.mTilesSpriteSheet, gfs)
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
+
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 proc rebuildAllRows(tm: TileMap) =
     let numRows = tm.mapSize.height.int * 2
