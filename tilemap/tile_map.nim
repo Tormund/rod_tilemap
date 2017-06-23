@@ -186,6 +186,9 @@ proc alpha*(l: BaseTileMapLayer): float=
 proc enabled*(l: BaseTileMapLayer): bool=
     return l.node.enabled
 
+proc `enabled=`*(l: BaseTileMapLayer, v: bool) =
+    l.node.enabled = v
+
 proc name*(l: BaseTileMapLayer): string =
     return l.node.name
 
@@ -991,7 +994,7 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                 let enabled = if visible: jl["visible"].getBVal() else: false
 
                 if layerCreator.isNil:
-                    if "layers" in jl:
+                    if layerType == "group":
                         for jLayer in jl["layers"]:
                             tm.parseLayer(jLayer, position, enabled)
                     else:
@@ -1003,8 +1006,11 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                 let name = jl["name"].getStr()
 
                 let alpha = jl["opacity"].getFNum()
-
-                layer.size = newSize(jl["width"].getFNum(), jl["height"].getFNum())
+                
+                if "width" notin jl or "height" notin jl:
+                    layer.size = zeroSize
+                else:
+                    layer.size = newSize(jl["width"].getFNum(), jl["height"].getFNum())
 
                 layer.offset = newSize(position.x, position.y)
 
