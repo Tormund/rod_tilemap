@@ -9,7 +9,7 @@ import nimx.assets.asset_loading
 import boolseq
 
 type
-    LayerRange = tuple
+    LayerRange* = tuple
         minx, maxx: int
         miny, maxy: int
 
@@ -59,8 +59,8 @@ type
     BaseTileMapLayer = ref object of Component
         size: Size
         offset*: Size
-        actualSize: LayerRange
-        map: TileMap
+        actualSize*: LayerRange
+        map*: TileMap
         properties: Properties
 
     TileMapLayer* = ref object of BaseTileMapLayer
@@ -276,26 +276,23 @@ proc layerIndexByName*(tm: TileMap, name: string): int =
         if l.name == name:
             return i
 
-proc insertLayer*(tm: TileMap, layerNode: Node, idx: int, layerWidth: int = 0)=
+proc insertLayer*(tm: TileMap, layerNode: Node, idx: int)=
     var layer = layerNode.componentIfAvailable(TileMapLayer).BaseTileMapLayer
     if layer.isNil:
         layer = layerNode.componentIfAvailable(ImageMapLayer).BaseTileMapLayer
 
     if not layer.isNil:
-        if layer of TileMapLayer:
-            let lWidth = if layerWidth == 0: tm.mapSize.width.int else: layerWidth
-            layer.actualSize.minx = 0
-            layer.actualSize.miny = 0
-            layer.actualSize.maxx = lWidth
-            layer.actualSize.maxy = layer.TileMapLayer.data.len div lWidth
         layer.map = tm
+        if layer of TileMapLayer:
+            layer.TileMapLayer.tileSize = tm.tileSize
+
         tm.node.addChild(layerNode)
         tm.layers.insert(layer, idx)
         if tm.drawingRows.len > 0:
             tm.rebuildAllRowsIfNeeded()
 
-proc addLayer*(tm: TileMap, layerNode: Node, layerWidth: int = 0)=
-    tm.insertLayer(layerNode, layerWidth, tm.layers.len)
+proc addLayer*(tm: TileMap, layerNode: Node, )=
+    tm.insertLayer(layerNode, tm.layers.len)
 
 proc removeLayer*(tm: TileMap, name: string)=
     for i, l in tm.layers:
@@ -310,12 +307,18 @@ proc layerByName*[T](tm: TileMap, name: string): T =
         if l.name == name and l of T:
             return l.T
 
-proc tileAtXY*(layer: TileMapLayer, x, y: int): int=
+proc tileIndexAtXY*(layer: TileMapLayer, x, y: int): int=
+    result = -1
     if (x >= layer.actualSize.minx and x < layer.actualSize.maxx) and (y >= layer.actualSize.miny and y < layer.actualSize.maxy):
 
         let idx = (layer.actualSize.maxx - layer.actualSize.minx) * (y - layer.actualSize.miny) + (x - layer.actualSize.minx)
         if idx < layer.data.len:
-            result = layer.data[idx]
+            result = idx
+
+proc tileAtXY*(layer: TileMapLayer, x, y: int): int=
+    let idx = layer.tileIndexAtXY(x, y)
+    if idx != -1:
+        result = layer.data[idx]
 
 proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:int]=
     var tileWidth = layer.tileSize.x
@@ -360,8 +363,13 @@ proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:i
         result.x = (position.x / tileWidth).int
         result.y = (position.y / tileHeight).int
 
+
+proc tileIndexAtPosition*(layer: TileMapLayer, position: Vector3): int=
+    let coords = layer.tileXYAtPosition(position)
+    result = layer.tileIndexAtXY(coords.x, coords.y)
+
 proc tileAtPosition*(layer: TileMapLayer, position: Vector3): int=
-    let coords = layer.tileXYAtPosition(position - layer.position)
+    let coords = layer.tileXYAtPosition(position)
     result = layer.tileAtXY(coords.x, coords.y)
 
 proc tilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
@@ -378,14 +386,15 @@ proc visibleTilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
             if r != 0:
                 result.add(r)
 
-proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple[layerName: string, x: int, y: int, tileid: int]]=
+proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple[layerName: string, x: int, y: int, tileid: int, index: int]]=
     result = @[]
     for l in tm.layers:
         if l of TileMapLayer and l.enabled:
-            let coords = l.TileMapLayer.tileXYAtPosition(position - l.position)
+            let coords = l.TileMapLayer.tileXYAtPosition(newVector3(position.x - l.offset.width, position.y - l.offset.height))
             let tileid = l.TileMapLayer.tileAtXY(coords.x, coords.y)
+            let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
             if tileid != 0:
-                result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid))
+                result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid, index: index))
 
 method drawLayer(layer: TileMapLayer, tm: TileMap) {.deprecated.}=
     var r = tm.layerRect(layer)
