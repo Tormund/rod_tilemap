@@ -19,17 +19,10 @@ proc moveImageFile(jstr: JsonNode, k: string, pathFrom: string = "") =
     if pathFrom.len > 0:
         path = pathFrom & '/' & path
 
-
     createDir(currentLocation & '/' & resourceNewPath)
+    echo "COPY FILE: IMAGE: ", path, " to ", copyTo
+    copyFile(path, copyTo)
 
-    when defined(safeMode):
-        try:
-            copyFile(path, copyTo)
-        except:
-            echo "Image not found: from ", path, " to ", copyTo
-    else:
-        echo "COPY FILE: ", path
-        copyFile(path, copyTo)
 
 proc moveTilesetFile(jstr: JsonNode, k: string)=
     let path = jstr[k].str
@@ -38,28 +31,31 @@ proc moveTilesetFile(jstr: JsonNode, k: string)=
     let copyTo = currentLocation & '/' & jPath
     jstr[k] = %jPath
 
-
     createDir(currentLocation & '/' & tilesetNewPath)
-    when defined(safeMode):
-        try:
-            copyFile(path, copyTo)
-        except:
-            echo "tileset not found from ", path, " to ", copyTo
-    else:
-        copyFile(path, copyTo)
+    echo "COPY FILE: TILESET: ", path, " to ", copyTo
+
+    copyFile(path, copyTo)
 
 
-proc readTileSet(jn: JsonNode, pathFrom: string = "")=
+proc readTileSet(jn: JsonNode, pathFrom: string = "", pathTo: string = "")=
     let spFile = splitFile(pathFrom)
     if "image" in jn:
-        jn.moveImageFile("image", spFile.dir)
+        try:
+            jn.moveImageFile("image", spFile.dir)
+        except OSError:
+            when not defined(safeMode):
+                raise
 
     elif "tiles" in jn:
         for k, v in jn["tiles"]:
-            v.moveImageFile("image", spFile.dir)
+            try:
+                v.moveImageFile("image", spFile.dir)
+            except OSError:
+                when not defined(safeMode):
+                    raise
 
-    if pathFrom.len > 0:
-        writeFile(pathFrom, $jn)
+    if pathTo.len > 0:
+        writeFile(pathTo, $jn)
 
 
 proc prepareLayers(jNode: var JsonNode, width, height: int) =
@@ -74,6 +70,11 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
     #     isStaggerIndexOdd = jNode["staggerindex"].getStr() == "odd"
 
     for layer in nodeLayers.mitems():
+        if "properties" in layer:
+            if "tiledonly" in layer["properties"]:
+                if layer["properties"]["tiledonly"].getBVal():
+                    continue
+
         if layer["type"].str == "group" and "layers" in layer:
             prepareLayers(layer, width, height)
             layers.add(layer)
@@ -85,8 +86,11 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
                     layer.moveImageFile("image")
                     layers.add(layer)
                 except OSError:
-                    echo "Image has not been founded. Skip."
-                    continue
+                    when not defined(safeMode):
+                        raise
+                    else:
+                        echo "Image has not been founded. Skip layer."
+                        continue
 
         if "data" in layer:
             let jdata = layer["data"]
@@ -159,16 +163,23 @@ proc readTiledFile(path: string)=
         let jTileSets = jTiled["tilesets"]
         for jts in jTileSets:
             if "source" in jts:
-                let path = jts["source"].str
-                let sf = path.splitFile()
+                let originalPath = jts["source"].str
+                let sf = originalPath.splitFile()
+
+                try:
+                    jts.moveTilesetFile("source")
+                except OSError:
+                    when not defined(safeMode):
+                        raise
+
                 if sf.ext == ".json":
-                    let jFile = parseFile(path)
-                    readTileSet(jFile, path)
+                    let jFile = parseFile(originalPath)
+                    let destinationPath = jts["source"].str
+                    readTileSet(jFile, originalPath, destinationPath)
                 elif sf.ext == ".tsx":
                     when not defined(safeMode):
-                        raise newException(Exception, "Incorrect tileSet format by " & path)
+                        raise newException(Exception, "Incorrect tileSet format by " & originalPath)
 
-                jts.moveTilesetFile("source")
             else:
                 readTileSet(jts)
 
