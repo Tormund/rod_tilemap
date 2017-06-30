@@ -61,7 +61,7 @@ type
         offset*: Size
         actualSize*: LayerRange
         map*: TileMap
-        properties: Properties
+        properties*: Properties
 
     TileMapLayer* = ref object of BaseTileMapLayer
         data*: seq[int16]
@@ -70,12 +70,14 @@ type
     ImageMapLayer* = ref object of BaseTileMapLayer
         image*: Image
 
+    NodeMapLayer* = ref object of BaseTileMapLayer
+
     BaseTileSet = ref object of RootObj
         tileSize: Vector3
         firstGid: int
         tilesCount: int
         name: string
-        properties: Properties
+        properties*: Properties
 
     TileSheet = ref object of BaseTileSet
         sheet: Image
@@ -123,6 +125,14 @@ type
 
     TidAndImage = tuple[image: Image, tid: int16]
 
+proc newNodeMapLayer*(node: Node, map: TileMap, size: Size = zeroSize, offset: Size = zeroSize, actualSize: LayerRange = (0, 0, 0, 0)): NodeMapLayer =
+    NodeMapLayer(
+        size: size,
+        offset: offset,
+        actualSize: actualSize,
+        map: map,
+        node: node
+    )
 
 proc newProperty(kind: PropertyType, value: JsonNode): Property =
     case kind:
@@ -270,6 +280,13 @@ proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
     result.maxx = ((r.y + r.height) / ts.y).int
 
 
+proc layerIndex*(tm: TileMap, sla: BaseTileMapLayer): int =
+    result = -1
+    for i, la in tm.layers:
+        if sla == la:
+            return i
+
+
 proc layerIndexByName*(tm: TileMap, name: string): int =
     result = -1
     for i, l in tm.layers:
@@ -280,13 +297,17 @@ proc insertLayer*(tm: TileMap, layerNode: Node, idx: int)=
     var layer = layerNode.componentIfAvailable(TileMapLayer).BaseTileMapLayer
     if layer.isNil:
         layer = layerNode.componentIfAvailable(ImageMapLayer).BaseTileMapLayer
+    if layer.isNil:
+        layer = layerNode.componentIfAvailable(NodeMapLayer).BaseTileMapLayer
+    if layer.isNil:
+        layer = newNodeMapLayer(layerNode, tm)
 
     if not layer.isNil:
         layer.map = tm
         if layer of TileMapLayer:
             layer.TileMapLayer.tileSize = tm.tileSize
 
-        tm.node.addChild(layerNode)
+        tm.node.insertChild(layerNode, idx)
         tm.layers.insert(layer, idx)
         if tm.drawingRows.len > 0:
             tm.rebuildAllRowsIfNeeded()
@@ -319,6 +340,9 @@ proc tileAtXY*(layer: TileMapLayer, x, y: int): int=
     let idx = layer.tileIndexAtXY(x, y)
     if idx != -1:
         result = layer.data[idx]
+
+proc positionAtTileXY*(tm: TileMap, col, row: int): Vector3 =
+    newVector3(col.float * tm.tileSize.x / 2.0, ((1 - (col mod 2)).float / 2.0 + row.float + 1) * tm.tileSize.y, 0.0)
 
 proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:int]=
     var tileWidth = layer.tileSize.x
@@ -510,6 +534,11 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                     r.size = iml.image.size
                     r.origin = newPoint(iml.node.position.x, iml.node.position.y)
                     c.drawImage(iml.image, r, alpha = iml.node.alpha)
+
+            elif layer of NodeMapLayer:
+                vboStateValid = false
+                let impl = NodeMapLayer(layer)
+                impl.node.recursiveDraw()
 
 method imageForTile(ts: BaseTileSet, tid: int16): Image {.base.} = discard
 
@@ -932,7 +961,10 @@ proc checkLoadingErr(err: string) {.raises: Exception.}=
 
 proc getProperties[T](tm: TileMap, node: JsonNode, item: T): Properties =
     if "propertytypes" in node and "properties" in node:
-        result = newTable[string, Property](node["propertytypes"].len)
+        var len = 4
+        while node["propertytypes"].len > len:
+            len *= 2
+        result = newTable[string, Property](len)
 
         for key, value in node["propertytypes"]:
             if key in node["properties"]:
