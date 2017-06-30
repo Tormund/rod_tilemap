@@ -38,7 +38,6 @@ proc pcgStaggeredRect*(tl: TileMapLayer, width, height: int, m, ltc, rtc, lbc, r
     var ftp = height - 1
 
     var codd = ftp mod 2 == 0
-    let ss = if lw mod 2 == 0: 0 else: 1
 
     for i in 0 ..< width:
         var p = ftp
