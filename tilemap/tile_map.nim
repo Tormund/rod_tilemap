@@ -56,7 +56,7 @@ type
     TileMapPropertyCollection = object
         collection: seq[TileMapProperty]
 
-    BaseTileMapLayer = ref object of Component
+    BaseTileMapLayer* = ref object of Component
         size: Size
         offset*: Size
         actualSize*: LayerRange
@@ -293,7 +293,7 @@ proc layerIndexByName*(tm: TileMap, name: string): int =
         if l.name == name:
             return i
 
-proc insertLayer*(tm: TileMap, layerNode: Node, idx: int)=
+proc insertLayer*(tm: TileMap, layerNode: Node, idx: int) =
     var layer = layerNode.componentIfAvailable(TileMapLayer).BaseTileMapLayer
     if layer.isNil:
         layer = layerNode.componentIfAvailable(ImageMapLayer).BaseTileMapLayer
@@ -314,6 +314,12 @@ proc insertLayer*(tm: TileMap, layerNode: Node, idx: int)=
 
 proc addLayer*(tm: TileMap, layerNode: Node, )=
     tm.insertLayer(layerNode, tm.layers.len)
+
+proc removeLayer*(tm: TileMap, idx: int) =
+    if idx < tm.layers.len:
+        let layer = tm.layers[idx]
+        tm.layers.del(idx)
+        layer.node.removeFromParent()
 
 proc removeLayer*(tm: TileMap, name: string)=
     for i, l in tm.layers:
@@ -342,7 +348,7 @@ proc tileAtXY*(layer: TileMapLayer, x, y: int): int=
         result = layer.data[idx]
 
 proc positionAtTileXY*(tm: TileMap, col, row: int): Vector3 =
-    newVector3(col.float * tm.tileSize.x / 2.0, ((1 - (col mod 2)).float / 2.0 + row.float + 1) * tm.tileSize.y, 0.0)
+    newVector3(col.float * tm.tileSize.x / 2.0, ((col mod 2).float / 2.0 + row.float + 0.5) * tm.tileSize.y, 0.0)
 
 proc tileXYAtPosition*(layer: TileMapLayer, position: Vector3): tuple[x:int, y:int]=
     var tileWidth = layer.tileSize.x
