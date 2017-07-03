@@ -20,6 +20,20 @@ Example:
         -size:32,16 without whitespaces!
 """
 
+proc resizeLayers(layer: JsonNode, ratioX, ratioY: float) =
+    for jl in layer["layers"]:
+        if "offsetx" in jl:
+            let lOffsetx = jl["offsetx"].getFNum()
+            jl["offsetx"] = %(lOffsetx * ratioX).int
+
+        if "offsety" in jl:
+            let lOffsety = jl["offsety"].getFNum()
+            jl["offsety"] = %(lOffsety * ratioY).int
+
+        if "layers" in jl:
+            resizeLayers(jl, ratioX, ratioY)
+            
+
 proc resizeTiledJsonMap(path: string) =
     var jMap = parseFile(path)
 
@@ -29,14 +43,7 @@ proc resizeTiledJsonMap(path: string) =
     let ratioX = newSizeX / oldSizeX
     let ratioY = newSizeY / oldSizeY
 
-    for jl in jMap["layers"]:
-        if "offsetx" in jl:
-            let lOffsetx = jl["offsetx"].getFNum()
-            jl["offsetx"] = %(lOffsetx * ratioX).int
-
-        if "offsety" in jl:
-            let lOffsety = jl["offsety"].getFNum()
-            jl["offsety"] = %(lOffsety * ratioY).int
+    resizeLayers(jMap, ratioX, ratioY)
 
     jMap["tilewidth"] = %newSizeX.int
     jMap["tileheight"] = %newSizeY.int
