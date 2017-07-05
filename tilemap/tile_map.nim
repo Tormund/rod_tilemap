@@ -569,6 +569,17 @@ proc imageForTile*(tm: TileMap, tid: int16): Image =
         if not result.isNil:
             return
 
+method setImageForTile(ts: BaseTileSet, tid: int16, i: Image) {.base.} = discard
+
+method setImageForTile(ts: TileCollection, tid: int16, i: Image) =
+    let tid = tid - ts.firstGid
+    if tid >= 0 and tid < ts.collection.len:
+        ts.collection[tid].image = i
+
+proc setImageForTile*(tm: TileMap, tid: int16, i: Image) =
+    for ts in tm.tileSets:
+        ts.setImageForTile(tid, i)
+
 proc itemsForPropertyName*(tm: TileMap, key: string): seq[TileMapProperty] =
     if key in tm.properties:
         result = tm.properties[key].collection
@@ -891,6 +902,16 @@ proc packAllTilesToSheet(tm: TileMap) =
             coords[14] = (p.x.Coord + sz.width - d) / texWidth.Coord
             coords[15] = (p.y.Coord + d) / texHeight.Coord
             tm.tileVCoords[i.tid] = coords
+
+            var subimageCoords: array[4, float32]
+            subimageCoords[0] = coords[2]
+            subimageCoords[1] = coords[3]
+            subimageCoords[2] = coords[10]
+            subimageCoords[3] = coords[7]
+
+            let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
+            tm.setImageForTile(i.tid, sub)
+
     endDraw(tm.mTilesSpriteSheet, gfs)
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
 
