@@ -1,47 +1,67 @@
-import json
+import json, strutils
 import ospaths, os, parseopt2
 
-var resourceNewPath: string
-var tilesetNewPath: string
-var currentLocation: string
+var destinationPath: string
+const imageLayersPath = "layers"
+const tilesetsPath = "../tiles"
 
-proc moveImageFile(jstr: JsonNode, k: string, pathFrom: string = "") =
+proc moveImageFile(jstr: JsonNode, k: string, pathTo: string) =
     var path = jstr[k].str
     let spFile = splitFile(path)
-    var jPath = resourceNewPath & '/' & spFile.name & spFile.ext
-    let copyTo = currentLocation & '/' & jPath
 
-    if pathFrom.len > 0:
-        jPath = spFile.name & spFile.ext
+    var jPath = pathTo & '/' & spFile.name & spFile.ext    
+    let copyTo = destinationPath & '/' & jPath
 
     jstr[k] = %jPath
 
-    if pathFrom.len > 0:
-        path = pathFrom & '/' & path
-
-    createDir(currentLocation & '/' & resourceNewPath)
+    createDir(splitFile(copyTo).dir)
     echo "COPY FILE: IMAGE: ", path, " to ", copyTo
     copyFile(path, copyTo)
 
+proc moveTileFile(jstr: JsonNode, k: string, pathFrom: string = "", pathTo: string = "", integrated: bool) =
+    var path = jstr[k].str
+    let spFile = splitFile(path)
+    
+    var jPath = tilesetsPath & '/'
+    if integrated:
+        jPath &= pathTo & '/' & spFile.name & spFile.ext
+    else:
+        jPath = pathTo & '/' & spFile.name & spFile.ext
+
+    var copyTo = destinationPath & '/'
+    if integrated:
+        copyTo &= jPath
+    else:
+        copyTo &= tilesetsPath & '/' & jPath
+
+    jstr[k] = %jPath
+    
+    if pathFrom.len > 0:
+        path = pathFrom & '/' & path
+    
+    createDir(splitFile(copyTo).dir)
+    echo "COPY FILE: TILE: ", path, " to ", copyTo
+    copyFile(path, copyTo)
 
 proc moveTilesetFile(jstr: JsonNode, k: string)=
     let path = jstr[k].str
     let spFile = splitFile(path)
-    let jPath = tilesetNewPath & '/' & spFile.name & spFile.ext
-    let copyTo = currentLocation & '/' & jPath
+    let jPath = tilesetsPath & '/' & spFile.name & spFile.ext
+    let copyTo = destinationPath & '/' & jPath
     jstr[k] = %jPath
 
-    createDir(currentLocation & '/' & tilesetNewPath)
+    createDir(splitFile(copyTo).dir)
     echo "COPY FILE: TILESET: ", path, " to ", copyTo
-
     copyFile(path, copyTo)
 
-
-proc readTileSet(jn: JsonNode, pathFrom: string = "", pathTo: string = "")=
+proc readTileSet(jn: JsonNode, pathFrom: string = nil)=
     let spFile = splitFile(pathFrom)
+    let tdest = jn["name"].str
+    let integrated = pathFrom.isNil
+    
     if "image" in jn:
         try:
-            jn.moveImageFile("image", spFile.dir)
+            jn.moveTileFile("image", spFile.dir, tdest, integrated)
         except OSError:
             when not defined(safeMode):
                 raise
@@ -49,14 +69,13 @@ proc readTileSet(jn: JsonNode, pathFrom: string = "", pathTo: string = "")=
     elif "tiles" in jn:
         for k, v in jn["tiles"]:
             try:
-                v.moveImageFile("image", spFile.dir)
+                v.moveTileFile("image", spFile.dir, tdest, integrated)
             except OSError:
                 when not defined(safeMode):
                     raise
 
-    if pathTo.len > 0:
-        writeFile(pathTo, $jn)
-
+    if not integrated:
+        writeFile(destinationPath & '/' & tilesetsPath & '/' & spFile.name & ".json", $jn)
 
 proc prepareLayers(jNode: var JsonNode, width, height: int) =
     var layers = newJArray()
@@ -83,7 +102,7 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
         if layer["type"].str == "imagelayer":
             if "image" in layer and layer["image"].str.len > 0:
                 try:
-                    layer.moveImageFile("image")
+                    layer.moveImageFile("image", imageLayersPath)
                     layers.add(layer)
                 except OSError:
                     when not defined(safeMode):
@@ -148,10 +167,6 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
 
 proc readTiledFile(path: string)=
     let tmpSplit = path.splitFile()
-    currentLocation = tmpSplit.dir
-    resourceNewPath = "assets"
-    tilesetNewPath  = resourceNewPath
-
     var jTiled = parseFile(path)
     var width = jTiled["width"].getNum().int
     var height = jTiled["height"].getNum().int
@@ -166,16 +181,15 @@ proc readTiledFile(path: string)=
                 let originalPath = jts["source"].str
                 let sf = originalPath.splitFile()
 
-                try:
-                    jts.moveTilesetFile("source")
-                except OSError:
-                    when not defined(safeMode):
-                        raise
-
                 if sf.ext == ".json":
                     let jFile = parseFile(originalPath)
-                    let destinationPath = jts["source"].str
-                    readTileSet(jFile, originalPath, destinationPath)
+                    try:
+                        jts.moveTilesetFile("source")
+                        readTileSet(jFile, originalPath)
+                    except OSError:
+                        when not defined(safeMode):
+                            raise
+
                 elif sf.ext == ".tsx":
                     when not defined(safeMode):
                         raise newException(Exception, "Incorrect tileSet format by " & originalPath)
@@ -183,17 +197,17 @@ proc readTiledFile(path: string)=
             else:
                 readTileSet(jts)
 
-    writeFile(path, $jTiled)
+    writeFile(destinationPath & "/" & tmpSplit.name & tmpSplit.ext, $jTiled)
 
 proc main()=
     var inFileName = ""
     for kind, key, val in getopt():
-        if kind == cmdArgument:
-            inFileName = key
-        elif key == "in":
+        if key == "map":
             inFileName = val
+        elif key == "dest":
+            destinationPath = val
         discard
-
+    echo "tiled_resource_collect inFileName ", inFileName, " destinationPath ", destinationPath
     if inFileName.len > 0:
         when defined(safeMode):
             echo "\n\n Running in safeMode !!\n\n"
