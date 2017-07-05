@@ -174,12 +174,13 @@ precision mediump float;
 
 varying vec2 vTexCoord;
 uniform sampler2D texUnit;
+uniform float uAlpha;
 
 void main() {
     gl_FragColor = texture2D(texUnit, vTexCoord);
     float a = gl_FragColor.a;
     a = clamp(step(0.49, gl_FragColor.a) + a, 0.0, 1.0);
-    gl_FragColor.a = a;
+    gl_FragColor.a = a * uAlpha;
 }
 """
 
@@ -476,8 +477,8 @@ proc prepareVBOs(tm: TileMap) =
 
     gl.activeTexture(gl.TEXTURE0)
     gl.uniform1i(gl.getUniformLocation(program, "texUnit"), 0)
-
-    gl.uniformMatrix4fv(gl.getUniformLocation(program, "uModelViewProjectionMatrix"), false, c.transform)
+    gl.uniform1f(gl.getUniformLocation(tm.program, "uAlpha"), 1.0)
+    gl.uniformMatrix4fv(gl.getUniformLocation(tm.program, "uModelViewProjectionMatrix"), false, c.transform)
 
     var quad: array[4, float32]
     let tex = tm.mTilesSpriteSheet.getTextureQuad(gl, quad)
@@ -497,40 +498,46 @@ method beforeDraw*(tm: TileMap, index: int): bool =
     let gl = c.gl
 
     var vboStateValid = false
-    var iTileLayer = 0
+    var iTileLayer = 0  
+    let vpm = tm.node.sceneView.viewProjMatrix
 
     for layer in tm.layers:
         if layer.node.enabled:
             if layer of TileMapLayer:
-                for i in 0 ..< tm.drawingRows.len:
-                    assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
-                    #echo "Drawing row: ", i, ", quads: ", tm.drawingRows[i].numberOfQuads
+                c.withTransform(vpm * layer.node.worldTransform):
+                    if vboStateValid:
+                        gl.uniformMatrix4fv(gl.getUniformLocation(tm.program, "uModelViewProjectionMatrix"), false, c.transform)
+                        gl.uniform1f(gl.getUniformLocation(tm.program, "uAlpha"), layer.node.alpha)
 
-                    let quadStartIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer]
-                    let quadEndIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer + 1]
-                    let numQuads = quadEndIndex - quadStartIndex
+                    for i in 0 ..< tm.drawingRows.len:
+                        assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
+                        #echo "Drawing row: ", i, ", quads: ", tm.drawingRows[i].numberOfQuads
 
-                    if numQuads != 0:
-                        if not vboStateValid:
-                            tm.prepareVBOs()
-                            vboStateValid = true
+                        let quadStartIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer]
+                        let quadEndIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer + 1]
+                        let numQuads = quadEndIndex - quadStartIndex
 
-                        const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
+                        if numQuads != 0:
+                            if not vboStateValid:
+                                tm.prepareVBOs()
+                                vboStateValid = true
 
-                        gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
-                        gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
+                            const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
 
-                        gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
+                            gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
+                            gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
 
-                    let objectStartIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer]
-                    let objectEndIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]
-                    let numObjects = objectEndIndex - objectStartIndex
+                            gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
 
-                    if numObjects != 0:
-                        vboStateValid = false
-                        for iObj in objectStartIndex ..< objectEndIndex:
-                            tm.drawingRows[i].objects[iObj].recursiveDraw()
-                inc iTileLayer
+                        let objectStartIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer]
+                        let objectEndIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]
+                        let numObjects = objectEndIndex - objectStartIndex
+
+                        if numObjects != 0:
+                            vboStateValid = false
+                            for iObj in objectStartIndex ..< objectEndIndex:
+                                tm.drawingRows[i].objects[iObj].recursiveDraw()
+                    inc iTileLayer
 
             elif layer of ImageMapLayer:
                 let iml = ImageMapLayer(layer)
@@ -538,8 +545,11 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                     vboStateValid = false
                     var r: Rect
                     r.size = iml.image.size
-                    r.origin = newPoint(iml.node.position.x, iml.node.position.y)
-                    c.drawImage(iml.image, r, alpha = iml.node.alpha)
+                    # r.origin = newPoint(iml.node.position.x, iml.node.position.y)
+                    # layer.node.isDirty = true
+                    # assert(not layer.node.parent.isNil)
+                    c.withTransform(vpm * layer.node.worldTransform):
+                        c.drawImage(iml.image, r, alpha = iml.node.alpha)
 
             elif layer of NodeMapLayer:
                 vboStateValid = false
@@ -594,23 +604,23 @@ proc itemsForPropertyValue*[T](tm: TileMap, key: string, value: T): seq[TileMapP
                     if item.property.fileVal == value:
                         result.add(item)
 
-method getBBox*(tm: TileMap): BBox =
-    result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
-    result.minPoint = newVector3(high(int).Coord/2.0, high(int).Coord/2.0, 0.0)
+# method getBBox*(tm: TileMap): BBox =
+#     result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
+#     result.minPoint = newVector3(high(int).Coord/2.0, high(int).Coord/2.0, 0.0)
 
-    for l in tm.layers:
-        if l of TileMapLayer:
-            let r = tm.layerRect(l.TileMapLayer)
-            if r.x < result.minPoint.x:
-                result.minPoint.x = r.x
-            if r.y < result.minPoint.y:
-                result.minPoint.y = r.y
-            if r.width + r.x > result.maxPoint.x:
-                result.maxPoint.x = r.width + r.x
-            if r.height + r.y > result.maxPoint.y:
-                result.maxPoint.y = r.height + r.y
+#     for l in tm.layers:
+#         if l of TileMapLayer:
+#             let r = tm.layerRect(l.TileMapLayer)
+#             if r.x < result.minPoint.x:
+#                 result.minPoint.x = r.x
+#             if r.y < result.minPoint.y:
+#                 result.minPoint.y = r.y
+#             if r.width + r.x > result.maxPoint.x:
+#                 result.maxPoint.x = r.width + r.x
+#             if r.height + r.y > result.maxPoint.y:
+#                 result.maxPoint.y = r.height + r.y
 
-    echo "getBBox tiledmap ", [result.minPoint, result.maxPoint]
+#     echo "getBBox tiledmap ", [result.minPoint, result.maxPoint]
 
 proc staggeredYTileRect(tm: TileMap, pos: int, tr: var Rect)=
     var row = (pos div tm.mapSize.width.int).float
@@ -763,12 +773,12 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                 let maxx = tml.actualSize.maxx
                 let layerWidth = maxx - tml.actualSize.minx
                 let layerStartOdd = tml.actualSize.minx mod 2 # 1 if row is odd, 0 otherwise
-                var tilesInLayerRow = layerWidth div 2
+                # var tilesInLayerRow = layerWidth div 2
                 #echo "layer: ", layer.name, ":" , tml.actualSize, ", tilesInLayerRow: ", tilesInLayerRow
 
                 let tileYInLayer = tileY - tml.actualSize.miny
 
-                let yOff = yOffBase + tml.offset.height
+                let yOff = yOffBase #+ tml.offset.height
 
                 #for i in 0 ..< tilesInLayerRow:
                 var i = tml.actualSize.minx
@@ -781,7 +791,7 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                     #echo "tileYInLayer: ", tileYInLayer, ", tileX: ", tileX, ", idx: ", tileIdx
                     let tile = tml.data[tileIdx]
 
-                    let xOff = Coord(tileX + tml.actualSize.minx) * tm.tileSize.x / 2 + tml.offset.width
+                    let xOff = Coord(tileX + tml.actualSize.minx) * tm.tileSize.x / 2 #+ tml.offset.width
                     #echo "xOff: ", xOff
 
                     if tile != 0:
