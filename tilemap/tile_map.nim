@@ -309,26 +309,14 @@ proc insertLayer*(tm: TileMap, layerNode: Node, idx: int) =
             layer.TileMapLayer.tileSize = tm.tileSize
 
         tm.node.insertChild(layerNode, idx)
+        echo "insertLayer ", idx, " name ", layer.name, " layers ", tm.layers.len
         tm.layers.insert(layer, idx)
+        echo "afterInsertLayer ", idx, " name ", layer.name, " layers ", tm.layers.len, "\n"
         if tm.drawingRows.len > 0:
             tm.rebuildAllRowsIfNeeded()
 
 proc addLayer*(tm: TileMap, layerNode: Node, )=
     tm.insertLayer(layerNode, tm.layers.len)
-
-proc removeLayer*(tm: TileMap, idx: int) =
-    if idx < tm.layers.len:
-        let layer = tm.layers[idx]
-        tm.layers.del(idx)
-        layer.node.removeFromParent()
-
-proc removeLayer*(tm: TileMap, name: string)=
-    for i, l in tm.layers:
-        if l.name == name:
-            tm.layers.del(i)
-            l.node.removeFromParent()
-            tm.rebuildAllRowsIfNeeded()
-            return
 
 proc layerByName*[T](tm: TileMap, name: string): T =
     for l in tm.layers:
@@ -426,7 +414,7 @@ proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple
             let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
             if tileid != 0:
                 result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid, index: index))
-
+    
 method drawLayer(layer: TileMapLayer, tm: TileMap) {.deprecated.}=
     var r = tm.layerRect(layer)
     var worldLayerRect = newRect(newPoint(layer.node.worldPos().x, layer.node.worldPos().y), r.size)
@@ -931,6 +919,21 @@ proc rebuildAllRowsIfNeeded(tm: TileMap) =
     if enabledLayers != tm.enabledLayers:
         swap(enabledLayers, tm.enabledLayers)
         tm.rebuildAllRows()
+
+proc removeLayer(tm: TileMap, idx: int, name: string) =
+    if idx < tm.layers.len:
+        let layer = tm.layers[idx]
+        tm.layers.delete(idx)
+        layer.node.removeFromParent()
+
+        if tm.drawingRows.len > 0:
+            tm.rebuildAllRows()
+
+proc removeLayer*(tm: TileMap, name: string)=
+    for i, l in tm.layers:
+        if l.name == name:
+            tm.removeLayer(i, name)
+            return
 
 #todo: serialize support
 # method deserialize*(c: TileMap, j: JsonNode, serealizer: Serializer) =
