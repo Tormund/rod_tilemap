@@ -828,9 +828,15 @@ proc packAllTilesToSheet(tm: TileMap) =
         let sz1 = i1.image.size
         let sz2 = i2.image.size
         cmp(sz1.width * sz1.height, sz2.width * sz2.height)
+    
+    let c = currentContext()
+    let gl = c.gl
 
-    let texWidth = 2048
-    let texHeight = 4096
+    var maxTextureSize = gl.getParami(gl.MAX_TEXTURE_SIZE)
+    let texWidth = min(2048, maxTextureSize)
+    let texHeight = min(4096, maxTextureSize)
+    
+    info "[TileMap::packAllTilesToSheet] maxTextureSize ", maxTextureSize
 
     assert(isPowerOfTwo(texWidth) and isPowerOfTwo(texHeight))
 
@@ -838,8 +844,7 @@ proc packAllTilesToSheet(tm: TileMap) =
 
     var gfs: GlFrameState
     beginDraw(tm.mTilesSpriteSheet, gfs)
-    let c = currentContext()
-    let gl = c.gl
+    
     gl.blendFunc(gl.ONE, gl.ZERO)
     c.withTransform ortho(0, texWidth.Coord, 0, texHeight.Coord, -1, 1):
         var rp = newPacker(texWidth.int32, texHeight.int32)
@@ -852,51 +857,52 @@ proc packAllTilesToSheet(tm: TileMap) =
             assert(sz.height > 2)
 
             let p = rp.pack(sz.width.int32, sz.height.int32)
-            assert(p.hasSpace)
+            if (p.hasSpace): 
+                #echo "pos: ", p
 
-            #echo "pos: ", p
+                var r: Rect
+                r.origin.x = Coord(p.x)
+                r.origin.y = Coord(p.y)
+                r.size = sz
+                c.drawImage(img, r)
 
-            var r: Rect
-            r.origin.x = Coord(p.x)
-            r.origin.y = Coord(p.y)
-            r.size = sz
-            c.drawImage(img, r)
+                let yOff = tm.tileSize.y - sz.height
 
-            let yOff = tm.tileSize.y - sz.height
+                const dv = -1.0
+                const d = 0.5
 
-            const dv = -1.0
-            const d = 0.5
+                var coords: array[16, float32]
+                coords[0] = dv
+                coords[1] = dv + yOff
+                coords[2] = (p.x.Coord + d) / texWidth.Coord
+                coords[3] = (p.y.Coord + d) / texHeight.Coord
 
-            var coords: array[16, float32]
-            coords[0] = dv
-            coords[1] = dv + yOff
-            coords[2] = (p.x.Coord + d) / texWidth.Coord
-            coords[3] = (p.y.Coord + d) / texHeight.Coord
+                coords[4] = dv
+                coords[5] = sz.height + yOff - dv
+                coords[6] = (p.x.Coord + d) / texWidth.Coord
+                coords[7] = (p.y.Coord + sz.height - d) / texHeight.Coord
 
-            coords[4] = dv
-            coords[5] = sz.height + yOff - dv
-            coords[6] = (p.x.Coord + d) / texWidth.Coord
-            coords[7] = (p.y.Coord + sz.height - d) / texHeight.Coord
+                coords[8] = sz.width - dv
+                coords[9] = sz.height + yOff - dv
+                coords[10] = (p.x.Coord + sz.width - d) / texWidth.Coord
+                coords[11] = (p.y.Coord + sz.height - d) / texHeight.Coord
 
-            coords[8] = sz.width - dv
-            coords[9] = sz.height + yOff - dv
-            coords[10] = (p.x.Coord + sz.width - d) / texWidth.Coord
-            coords[11] = (p.y.Coord + sz.height - d) / texHeight.Coord
+                coords[12] = sz.width - dv
+                coords[13] = 0 + yOff + dv
+                coords[14] = (p.x.Coord + sz.width - d) / texWidth.Coord
+                coords[15] = (p.y.Coord + d) / texHeight.Coord
+                tm.tileVCoords[i.tid] = coords
 
-            coords[12] = sz.width - dv
-            coords[13] = 0 + yOff + dv
-            coords[14] = (p.x.Coord + sz.width - d) / texWidth.Coord
-            coords[15] = (p.y.Coord + d) / texHeight.Coord
-            tm.tileVCoords[i.tid] = coords
+                var subimageCoords: array[4, float32]
+                subimageCoords[0] = coords[2]
+                subimageCoords[1] = coords[3]
+                subimageCoords[2] = coords[10]
+                subimageCoords[3] = coords[7]
 
-            var subimageCoords: array[4, float32]
-            subimageCoords[0] = coords[2]
-            subimageCoords[1] = coords[3]
-            subimageCoords[2] = coords[10]
-            subimageCoords[3] = coords[7]
-
-            let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
-            tm.setImageForTile(i.tid, sub)
+                let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
+                tm.setImageForTile(i.tid, sub)
+            else: 
+                warn "pack ", i.image.filePath, " doesnt fit ", i.image.size
 
     endDraw(tm.mTilesSpriteSheet, gfs)
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
