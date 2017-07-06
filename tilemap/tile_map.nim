@@ -309,9 +309,7 @@ proc insertLayer*(tm: TileMap, layerNode: Node, idx: int) =
             layer.TileMapLayer.tileSize = tm.tileSize
 
         tm.node.insertChild(layerNode, idx)
-        echo "insertLayer ", idx, " name ", layer.name, " layers ", tm.layers.len
         tm.layers.insert(layer, idx)
-        echo "afterInsertLayer ", idx, " name ", layer.name, " layers ", tm.layers.len, "\n"
         if tm.drawingRows.len > 0:
             tm.rebuildAllRowsIfNeeded()
 
