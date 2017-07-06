@@ -67,6 +67,20 @@ proc readTileSet(jn: JsonNode, pathFrom: string = nil)=
                 raise
 
     elif "tiles" in jn:
+        if "tilepropertytypes" in jn and "tileproperties" in jn:
+            for key, value in jn["tilepropertytypes"]:
+                var tile = jn["tiles"][key]
+                
+                if "properties" notin tile:
+                    tile["properties"] = newJObject()
+                for key, value in jn["tileproperties"][key]:
+                    tile["properties"][key] = value
+
+                if "propertytypes" notin tile:
+                    tile["propertytypes"] = newJObject()
+                for key, value in jn["tilepropertytypes"][key]:
+                    tile["propertytypes"][key] = value
+
         for k, v in jn["tiles"]:
             try:
                 v.moveTileFile("image", spFile.dir, tdest, integrated)
