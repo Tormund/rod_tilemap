@@ -946,6 +946,7 @@ proc removeLayer*(tm: TileMap, name: string)=
 # method serialize*(c: TileMap, s: Serializer): JsonNode=
 #     result = newJObject()
 
+
 method visitProperties*(tm: TileMap, p: var PropertyVisitor) =
     p.visitProperty("mapSize", tm.mapSize)
     p.visitProperty("tileSize", tm.tileSize)
@@ -1126,7 +1127,39 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
 
                 if layerCreator.isNil:
                     if layerType == "group":
+                        var grps: JsonNode
+                        var grpt: JsonNode
+                        if "propertytypes" in jl and "properties" in jl:
+                            grps = jl["properties"]
+                            grpt = jl["propertytypes"]
+
+                        let inheritProperties = not grps.isNil and not grpt.isNil
+
                         for jLayer in jl["layers"]:
+                            ## properties inheritance
+                            if inheritProperties:
+                                var chps: JsonNode
+                                var chpt: JsonNode
+                                if "propertytypes" in jLayer and "properties" in jLayer:
+                                    chpt = jLayer["propertytypes"]
+                                    chps = jLayer["properties"]
+
+                                if chps.isNil:
+                                    chps = newJObject()
+                                if chpt.isNil:
+                                    chpt = newJObject()
+                                
+                                for pk, pv in grps:
+                                    if pk notin chps:
+                                        chps[pk] = pv
+
+                                for pk, pv in grpt:
+                                    if pk notin chpt:
+                                        chpt[pk] = pv
+
+                                jLayer["properties"] = chps
+                                jLayer["propertytypes"] = chpt
+
                             tm.parseLayer(jLayer, position, enabled)
                     else:
                         warn "TileMap loadTiled: ", layerType, " doesn't supported!"
@@ -1160,6 +1193,7 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                 tm.layers.add(layer)
 
                 layer.properties = getProperties(tm, jl, layer)
+                
             for jl in jtm["layers"]:
                 tm.parseLayer(jl)
 
