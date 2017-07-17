@@ -412,7 +412,25 @@ proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple
             let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
             if tileid != 0:
                 result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid, index: index))
-    
+
+proc layerIntersectsAtPositionWithPropertyName*(tm: TileMap, position: Vector3, prop:string): seq[BaseTileMapLayer]=
+    result = @[]
+    for l in tm.layers:
+        if not l.properties.isNil and prop in l.properties:
+            if l of TileMapLayer:
+                let coords = l.TileMapLayer.tileXYAtPosition(newVector3(position.x - l.offset.width, position.y - l.offset.height))
+                let tileid = l.TileMapLayer.tileAtXY(coords.x, coords.y)
+                let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
+                if tileid != 0:
+                    result.add(l)
+
+            # elif l of ImageMapLayer: # todo: implement raycasting for images by alpha
+            #     let img = l.ImageMapLayer.image
+            #     let pos = l.node.position
+            #     let r = newRect(pos.x, pos.y, img.size.width, img.size.height)
+            #     if r.contains(newPoint(position.x, position.y)):
+            #         result.add(l)
+
 method drawLayer(layer: TileMapLayer, tm: TileMap) {.deprecated.}=
     var r = tm.layerRect(layer)
     var worldLayerRect = newRect(newPoint(layer.node.worldPos().x, layer.node.worldPos().y), r.size)
@@ -946,6 +964,23 @@ proc removeLayer*(tm: TileMap, name: string)=
 # method serialize*(c: TileMap, s: Serializer): JsonNode=
 #     result = newJObject()
 
+
+method visitProperties*(tm: BaseTileMapLayer, p: var PropertyVisitor) =
+    if not tm.properties.isNil:
+        for k, v in tm.properties:
+            case v.kind:
+            of lptString:
+                p.visitProperty(k, v.strVal)
+            of lptBool:
+                p.visitProperty(k, v.boolVal)
+            of lptColor:
+                p.visitProperty(k, v.colorVal)
+            of lptFloat:
+                p.visitProperty(k, v.floatVal)
+            of lptInt:
+                p.visitProperty(k, v.intVal)
+            else: 
+                discard
 
 method visitProperties*(tm: TileMap, p: var PropertyVisitor) =
     p.visitProperty("mapSize", tm.mapSize)
