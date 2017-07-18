@@ -206,32 +206,6 @@ proc `enabled=`*(l: BaseTileMapLayer, v: bool) =
 proc name*(l: BaseTileMapLayer): string =
     return l.node.name
 
-method canDrawTile(ts: BaseTileSet, tid: int): bool=
-    result = tid >= ts.firstGid and tid < ts.firstGid + ts.tilesCount
-
-method canDrawTile(ts: TileCollection, tid: int): bool=
-    let tid = tid - ts.firstGid
-    result = tid >= 0 and tid < ts.collection.len and not ts.collection[tid].image.isNil
-
-method drawTile(ts: BaseTileSet, tid: int, r: Rect, a: float) {.base.}=
-    raise newException(Exception, "Abstract method called!")
-
-method drawTile(ts: TileSheet, tid: int, r: Rect, a: float)=
-    let tilePos = tid - ts.firstGid
-    let tileX = (tilePos mod ts.columns) * ts.tileSize.x.int
-    let tileY = (tilePos div ts.columns) * ts.tileSize.y.int
-    currentContext().drawImage(ts.sheet, r, newRect(tileX.float, tileY.float, ts.tileSize.x, ts.tileSize.y), a)
-
-method drawTile(ts: TileCollection, tid: int, r: Rect, a: float)=
-    let image = ts.collection[tid - ts.firstGid].image
-    let imageSize = image.size
-    var tr = r
-    if imageSize.width.int != tr.width.int or imageSize.height.int != tr.height.int:
-        tr.origin += newPoint(0, r.size.height - imageSize.height)
-        tr.size = imageSize
-
-    currentContext().drawImage(image, tr, alpha = a)
-
 proc layerSize(l: TileMapLayer): Size=
     return newSize((l.actualSize.maxx - l.actualSize.minx).float, (l.actualSize.maxy - l.actualSize.miny).float)
 
@@ -257,12 +231,6 @@ proc layerRect(tm: TileMap, l: TileMapLayer): Rect =
 
     else:
         discard
-
-method drawLayer(layer: BaseTileMapLayer, tm: TileMap) {.base.} =
-    raise newException(Exception, "Abstract method called!")
-
-method drawLayer(layer: ImageMapLayer, tm: TileMap)=
-    currentContext().drawImage(layer.image, newRect(layer.position.x, layer.position.y, layer.image.size.width, layer.image.size.height), alpha = layer.alpha)
 
 proc getViewportRect(l: TileMapLayer): Rect=
     if not l.node.sceneView.isNil:
@@ -430,33 +398,6 @@ proc layerIntersectsAtPositionWithPropertyName*(tm: TileMap, position: Vector3, 
             #     let r = newRect(pos.x, pos.y, img.size.width, img.size.height)
             #     if r.contains(newPoint(position.x, position.y)):
             #         result.add(l)
-
-method drawLayer(layer: TileMapLayer, tm: TileMap) {.deprecated.}=
-    var r = tm.layerRect(layer)
-    var worldLayerRect = newRect(newPoint(layer.node.worldPos().x, layer.node.worldPos().y), r.size)
-    let viewRect = layer.getViewportRect()
-
-    # if worldLayerRect.intersect(viewRect):
-    let (cols, cole, rows, rowe) = layer.getDrawRange(viewRect, tm.tileSize)
-
-    let mapWidth = tm.mapSize.width.int
-    var tileDrawRect = newRect(0.0, 0.0, 0.0, 0.0)
-    let camera = layer.node.sceneView.camera
-
-    for y in cols .. cole:
-        let mapWidthY = mapWidth * y
-        for x in rows .. rowe:
-            let pos = mapWidthY + x
-
-            let tileId = layer.tileAtXY(x, y)
-            if tileId == 0: continue
-
-            tm.tileDrawRect(tm, pos, tileDrawRect)
-
-            for tileSet in tm.tileSets:
-                if tileSet.canDrawTile(tileId):
-                    tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
-                    break
 
 proc quadIndexBuffer(tm: TileMap): BufferRef =
     if tm.maxQuadsInRun > tm.quadBufferLen:
@@ -874,41 +815,61 @@ proc packAllTilesToSheet(tm: TileMap) =
             assert(sz.width > 2)
             assert(sz.height > 2)
 
-            let p = rp.pack(sz.width.int32, sz.height.int32)
-            if (p.hasSpace): 
+            const margin = 4 # Hack
+
+            let p = rp.pack(sz.width.int32 + margin * 2, sz.height.int32 + margin * 2)
+            if p.hasSpace: 
                 #echo "pos: ", p
 
                 var r: Rect
-                r.origin.x = Coord(p.x)
-                r.origin.y = Coord(p.y)
+                r.origin.x = Coord(p.x) # Coord(p.x + margin)
+                r.origin.y = Coord(p.y) # Coord(p.y + margin)
                 r.size = sz
-                c.drawImage(img, r)
+                r.size.width += margin * 2
+                r.size.height += margin * 2
+#                var tc: array[4, float32]
+#                let tex = img.getTextureQuad(gl, tc)
+#                gl.bindTexture(gl.TEXTURE_2D, tex)
+                # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+                # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+
+                var fromRect = r
+                fromRect.origin.x = - margin
+                fromRect.origin.y = - margin
+                c.drawImage(img, r, fromRect)
+
+                r.origin.x += margin
+                r.origin.y += margin
+
+                r.size.width -= margin * 2
+                r.size.height -= margin * 2
+
 
                 let yOff = tm.tileSize.y - sz.height
 
-                const dv = -1.0
-                const d = 0.5
+                const dv = 0 #-1.0
+                const d = 0.0 #1.0
 
                 var coords: array[16, float32]
                 coords[0] = dv
                 coords[1] = dv + yOff
-                coords[2] = (p.x.Coord + d) / texWidth.Coord
-                coords[3] = (p.y.Coord + d) / texHeight.Coord
+                coords[2] = (r.x.Coord + d) / texWidth.Coord
+                coords[3] = (r.y.Coord + d) / texHeight.Coord
 
                 coords[4] = dv
                 coords[5] = sz.height + yOff - dv
-                coords[6] = (p.x.Coord + d) / texWidth.Coord
-                coords[7] = (p.y.Coord + sz.height - d) / texHeight.Coord
+                coords[6] = (r.x.Coord + d) / texWidth.Coord
+                coords[7] = (r.maxY - d) / texHeight.Coord
 
                 coords[8] = sz.width - dv
                 coords[9] = sz.height + yOff - dv
-                coords[10] = (p.x.Coord + sz.width - d) / texWidth.Coord
-                coords[11] = (p.y.Coord + sz.height - d) / texHeight.Coord
+                coords[10] = (r.maxX - d) / texWidth.Coord
+                coords[11] = (r.maxY - d) / texHeight.Coord
 
                 coords[12] = sz.width - dv
                 coords[13] = 0 + yOff + dv
-                coords[14] = (p.x.Coord + sz.width - d) / texWidth.Coord
-                coords[15] = (p.y.Coord + d) / texHeight.Coord
+                coords[14] = (r.maxX - d) / texWidth.Coord
+                coords[15] = (r.y + d) / texHeight.Coord
                 tm.tileVCoords[i.tid] = coords
 
                 var subimageCoords: array[4, float32]
