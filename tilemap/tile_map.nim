@@ -1244,42 +1244,7 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
 proc loadTiledWithResource*(tm: TileMap, path: string) =
     var done = false
     tm.loadTiledWithUrl("res://" & path) do():
-        done = true
-        echo " TILESETS LEN ", tm.tileSets.len
-        #[
-            TileCollections optimization
-        ]#
-
-        # var tileCollections = newSeq[TileCollection]()
-        # var tileSheets = newSeq[TileSheet]()
-        # var tidsInCollections = 0
-        # for ts in tm.tileSets:
-        #     if ts of TileCollection:
-        #         let coll = ts.TileCollection
-        #         tidsInCollections += coll.firstGid + coll.collection.len
-        #         tileCollections.add(coll)
-        #     else:
-        #         tileSheets.add(ts.TileSheet)
-        
-        # tm.tileSets.setLen(0)
-
-        # if tileCollections.len > 0:
-        # #         BaseTileSet = ref object of RootObj
-        # # tileSize: Vector3
-        # # firstGid: int
-        # # tilesCount: int
-        # # name: string
-        # # properties*: Properties
-
-        # # TileCollection = ref object of BaseTileSet
-        # # collection: seq[tuple[image: Image, properties: Properties]]
-
-        # var bigCollection = new(TileCollection)
-        # bigCollection.collection = newSeq[tuple[image: Image, properties: Properties]](tidsInCollections)
-        # bigCollection.firstGid = 0
-        # bigCollection.tilesCount = tidsInCollections
-
-            
+        done = true    
 
         echo "done loadTiledWithResource"
     if not done:
