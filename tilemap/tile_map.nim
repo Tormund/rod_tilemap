@@ -36,7 +36,7 @@ type
             of lptFile:
                 fileVal*: string
 
-    Properties = TableRef[string, Property]
+    Properties* = TableRef[string, Property]
 
     TileMapPropertyType* = enum
         tmlptLayer
@@ -289,6 +289,11 @@ proc layerByName*[T](tm: TileMap, name: string): T =
         if l.name == name and l of T:
             return l.T
 
+proc tileXYAtIndex*(layer: TileMapLayer, idx: int): tuple[x:int, y:int]=
+    let width = layer.actualSize.maxx - layer.actualSize.minx
+    result.x = idx mod width + layer.actualSize.minx
+    result.y = idx div width + layer.actualSize.miny
+
 proc tileIndexAtXY*(layer: TileMapLayer, x, y: int): int=
     result = -1
     if (x >= layer.actualSize.minx and x < layer.actualSize.maxx) and (y >= layer.actualSize.miny and y < layer.actualSize.maxy):
@@ -503,6 +508,8 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
 method imageForTile(ts: BaseTileSet, tid: int16): Image {.base.} = discard
 
+method propertiesForTile*(ts: BaseTileSet, tid: int16): Properties {.base.} = discard
+
 method imageForTile(ts: TileCollection, tid: int16): Image =
     let tid = tid - ts.firstGid
     if tid >= 0 and tid < ts.collection.len:
@@ -513,6 +520,18 @@ proc imageForTile*(tm: TileMap, tid: int16): Image =
         result = ts.imageForTile(tid)
         if not result.isNil:
             return
+
+method propertiesForTile*(ts: TileCollection, tid: int16): Properties=
+    let tid = tid - ts.firstGid
+    if tid >= 0 and tid < ts.collection.len:
+        return ts.collection[tid].properties
+
+proc propertiesForTile*(tm: TileMap, tid: int16): Properties =
+    for ts in tm.tileSets:
+        result = ts.propertiesForTile(tid)
+        if not result.isNil:
+            return
+
 
 method setImageForTile(ts: BaseTileSet, tid: int16, i: Image) {.base.} = discard
 
@@ -1219,13 +1238,49 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                     let ts = loadTileSet(jts, serializer, tm)
                     if not ts.isNil:
                         tm.tileSets.add(ts)
-
+            
         serializer.finish()
 
 proc loadTiledWithResource*(tm: TileMap, path: string) =
     var done = false
     tm.loadTiledWithUrl("res://" & path) do():
         done = true
+        echo " TILESETS LEN ", tm.tileSets.len
+        #[
+            TileCollections optimization
+        ]#
+
+        # var tileCollections = newSeq[TileCollection]()
+        # var tileSheets = newSeq[TileSheet]()
+        # var tidsInCollections = 0
+        # for ts in tm.tileSets:
+        #     if ts of TileCollection:
+        #         let coll = ts.TileCollection
+        #         tidsInCollections += coll.firstGid + coll.collection.len
+        #         tileCollections.add(coll)
+        #     else:
+        #         tileSheets.add(ts.TileSheet)
+        
+        # tm.tileSets.setLen(0)
+
+        # if tileCollections.len > 0:
+        # #         BaseTileSet = ref object of RootObj
+        # # tileSize: Vector3
+        # # firstGid: int
+        # # tilesCount: int
+        # # name: string
+        # # properties*: Properties
+
+        # # TileCollection = ref object of BaseTileSet
+        # # collection: seq[tuple[image: Image, properties: Properties]]
+
+        # var bigCollection = new(TileCollection)
+        # bigCollection.collection = newSeq[tuple[image: Image, properties: Properties]](tidsInCollections)
+        # bigCollection.firstGid = 0
+        # bigCollection.tilesCount = tidsInCollections
+
+            
+
         echo "done loadTiledWithResource"
     if not done:
         echo "failed loadTiledWithResource"
