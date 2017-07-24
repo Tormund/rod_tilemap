@@ -36,7 +36,7 @@ type
             of lptFile:
                 fileVal*: string
 
-    Properties = TableRef[string, Property]
+    Properties* = TableRef[string, Property]
 
     TileMapPropertyType* = enum
         tmlptLayer
@@ -206,32 +206,6 @@ proc `enabled=`*(l: BaseTileMapLayer, v: bool) =
 proc name*(l: BaseTileMapLayer): string =
     return l.node.name
 
-method canDrawTile(ts: BaseTileSet, tid: int): bool=
-    result = tid >= ts.firstGid and tid < ts.firstGid + ts.tilesCount
-
-method canDrawTile(ts: TileCollection, tid: int): bool=
-    let tid = tid - ts.firstGid
-    result = tid >= 0 and tid < ts.collection.len and not ts.collection[tid].image.isNil
-
-method drawTile(ts: BaseTileSet, tid: int, r: Rect, a: float) {.base.}=
-    raise newException(Exception, "Abstract method called!")
-
-method drawTile(ts: TileSheet, tid: int, r: Rect, a: float)=
-    let tilePos = tid - ts.firstGid
-    let tileX = (tilePos mod ts.columns) * ts.tileSize.x.int
-    let tileY = (tilePos div ts.columns) * ts.tileSize.y.int
-    currentContext().drawImage(ts.sheet, r, newRect(tileX.float, tileY.float, ts.tileSize.x, ts.tileSize.y), a)
-
-method drawTile(ts: TileCollection, tid: int, r: Rect, a: float)=
-    let image = ts.collection[tid - ts.firstGid].image
-    let imageSize = image.size
-    var tr = r
-    if imageSize.width.int != tr.width.int or imageSize.height.int != tr.height.int:
-        tr.origin += newPoint(0, r.size.height - imageSize.height)
-        tr.size = imageSize
-
-    currentContext().drawImage(image, tr, alpha = a)
-
 proc layerSize(l: TileMapLayer): Size=
     return newSize((l.actualSize.maxx - l.actualSize.minx).float, (l.actualSize.maxy - l.actualSize.miny).float)
 
@@ -257,12 +231,6 @@ proc layerRect(tm: TileMap, l: TileMapLayer): Rect =
 
     else:
         discard
-
-method drawLayer(layer: BaseTileMapLayer, tm: TileMap) {.base.} =
-    raise newException(Exception, "Abstract method called!")
-
-method drawLayer(layer: ImageMapLayer, tm: TileMap)=
-    currentContext().drawImage(layer.image, newRect(layer.position.x, layer.position.y, layer.image.size.width, layer.image.size.height), alpha = layer.alpha)
 
 proc getViewportRect(l: TileMapLayer): Rect=
     if not l.node.sceneView.isNil:
@@ -320,6 +288,11 @@ proc layerByName*[T](tm: TileMap, name: string): T =
     for l in tm.layers:
         if l.name == name and l of T:
             return l.T
+
+proc tileXYAtIndex*(layer: TileMapLayer, idx: int): tuple[x:int, y:int]=
+    let width = layer.actualSize.maxx - layer.actualSize.minx
+    result.x = idx mod width + layer.actualSize.minx
+    result.y = idx div width + layer.actualSize.miny
 
 proc tileIndexAtXY*(layer: TileMapLayer, x, y: int): int=
     result = -1
@@ -412,33 +385,24 @@ proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple
             let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
             if tileid != 0:
                 result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid, index: index))
-    
-method drawLayer(layer: TileMapLayer, tm: TileMap) {.deprecated.}=
-    var r = tm.layerRect(layer)
-    var worldLayerRect = newRect(newPoint(layer.node.worldPos().x, layer.node.worldPos().y), r.size)
-    let viewRect = layer.getViewportRect()
 
-    # if worldLayerRect.intersect(viewRect):
-    let (cols, cole, rows, rowe) = layer.getDrawRange(viewRect, tm.tileSize)
+proc layerIntersectsAtPositionWithPropertyName*(tm: TileMap, position: Vector3, prop:string): seq[BaseTileMapLayer]=
+    result = @[]
+    for l in tm.layers:
+        if not l.properties.isNil and prop in l.properties:
+            if l of TileMapLayer:
+                let coords = l.TileMapLayer.tileXYAtPosition(newVector3(position.x - l.offset.width, position.y - l.offset.height))
+                let tileid = l.TileMapLayer.tileAtXY(coords.x, coords.y)
+                let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
+                if tileid != 0:
+                    result.add(l)
 
-    let mapWidth = tm.mapSize.width.int
-    var tileDrawRect = newRect(0.0, 0.0, 0.0, 0.0)
-    let camera = layer.node.sceneView.camera
-
-    for y in cols .. cole:
-        let mapWidthY = mapWidth * y
-        for x in rows .. rowe:
-            let pos = mapWidthY + x
-
-            let tileId = layer.tileAtXY(x, y)
-            if tileId == 0: continue
-
-            tm.tileDrawRect(tm, pos, tileDrawRect)
-
-            for tileSet in tm.tileSets:
-                if tileSet.canDrawTile(tileId):
-                    tileSet.drawTile(tileId, tileDrawRect, layer.alpha)
-                    break
+            # elif l of ImageMapLayer: # todo: implement raycasting for images by alpha
+            #     let img = l.ImageMapLayer.image
+            #     let pos = l.node.position
+            #     let r = newRect(pos.x, pos.y, img.size.width, img.size.height)
+            #     if r.contains(newPoint(position.x, position.y)):
+            #         result.add(l)
 
 proc quadIndexBuffer(tm: TileMap): BufferRef =
     if tm.maxQuadsInRun > tm.quadBufferLen:
@@ -544,6 +508,8 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
 method imageForTile(ts: BaseTileSet, tid: int16): Image {.base.} = discard
 
+method propertiesForTile*(ts: BaseTileSet, tid: int16): Properties {.base.} = discard
+
 method imageForTile(ts: TileCollection, tid: int16): Image =
     let tid = tid - ts.firstGid
     if tid >= 0 and tid < ts.collection.len:
@@ -554,6 +520,18 @@ proc imageForTile*(tm: TileMap, tid: int16): Image =
         result = ts.imageForTile(tid)
         if not result.isNil:
             return
+
+method propertiesForTile*(ts: TileCollection, tid: int16): Properties=
+    let tid = tid - ts.firstGid
+    if tid >= 0 and tid < ts.collection.len:
+        return ts.collection[tid].properties
+
+proc propertiesForTile*(tm: TileMap, tid: int16): Properties =
+    for ts in tm.tileSets:
+        result = ts.propertiesForTile(tid)
+        if not result.isNil:
+            return
+
 
 method setImageForTile(ts: BaseTileSet, tid: int16, i: Image) {.base.} = discard
 
@@ -828,9 +806,15 @@ proc packAllTilesToSheet(tm: TileMap) =
         let sz1 = i1.image.size
         let sz2 = i2.image.size
         cmp(sz1.width * sz1.height, sz2.width * sz2.height)
+    
+    let c = currentContext()
+    let gl = c.gl
 
-    let texWidth = 2048
-    let texHeight = 4096
+    var maxTextureSize = gl.getParami(gl.MAX_TEXTURE_SIZE)
+    let texWidth = min(2048, maxTextureSize)
+    let texHeight = min(4096, maxTextureSize)
+    
+    info "[TileMap::packAllTilesToSheet] maxTextureSize ", maxTextureSize
 
     assert(isPowerOfTwo(texWidth) and isPowerOfTwo(texHeight))
 
@@ -838,8 +822,7 @@ proc packAllTilesToSheet(tm: TileMap) =
 
     var gfs: GlFrameState
     beginDraw(tm.mTilesSpriteSheet, gfs)
-    let c = currentContext()
-    let gl = c.gl
+    
     gl.blendFunc(gl.ONE, gl.ZERO)
     c.withTransform ortho(0, texWidth.Coord, 0, texHeight.Coord, -1, 1):
         var rp = newPacker(texWidth.int32, texHeight.int32)
@@ -851,52 +834,73 @@ proc packAllTilesToSheet(tm: TileMap) =
             assert(sz.width > 2)
             assert(sz.height > 2)
 
-            let p = rp.pack(sz.width.int32, sz.height.int32)
-            assert(p.hasSpace)
+            const margin = 4 # Hack
 
-            #echo "pos: ", p
+            let p = rp.pack(sz.width.int32 + margin * 2, sz.height.int32 + margin * 2)
+            if p.hasSpace: 
+                #echo "pos: ", p
 
-            var r: Rect
-            r.origin.x = Coord(p.x)
-            r.origin.y = Coord(p.y)
-            r.size = sz
-            c.drawImage(img, r)
+                var r: Rect
+                r.origin.x = Coord(p.x) # Coord(p.x + margin)
+                r.origin.y = Coord(p.y) # Coord(p.y + margin)
+                r.size = sz
+                r.size.width += margin * 2
+                r.size.height += margin * 2
+#                var tc: array[4, float32]
+#                let tex = img.getTextureQuad(gl, tc)
+#                gl.bindTexture(gl.TEXTURE_2D, tex)
+                # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+                # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 
-            let yOff = tm.tileSize.y - sz.height
+                var fromRect = r
+                fromRect.origin.x = - margin
+                fromRect.origin.y = - margin
+                c.drawImage(img, r, fromRect)
 
-            const dv = -1.0
-            const d = 0.5
+                r.origin.x += margin
+                r.origin.y += margin
 
-            var coords: array[16, float32]
-            coords[0] = dv
-            coords[1] = dv + yOff
-            coords[2] = (p.x.Coord + d) / texWidth.Coord
-            coords[3] = (p.y.Coord + d) / texHeight.Coord
+                r.size.width -= margin * 2
+                r.size.height -= margin * 2
 
-            coords[4] = dv
-            coords[5] = sz.height + yOff - dv
-            coords[6] = (p.x.Coord + d) / texWidth.Coord
-            coords[7] = (p.y.Coord + sz.height - d) / texHeight.Coord
 
-            coords[8] = sz.width - dv
-            coords[9] = sz.height + yOff - dv
-            coords[10] = (p.x.Coord + sz.width - d) / texWidth.Coord
-            coords[11] = (p.y.Coord + sz.height - d) / texHeight.Coord
+                let yOff = tm.tileSize.y - sz.height
 
-            coords[12] = sz.width - dv
-            coords[13] = 0 + yOff + dv
-            coords[14] = (p.x.Coord + sz.width - d) / texWidth.Coord
-            coords[15] = (p.y.Coord + d) / texHeight.Coord
-            tm.tileVCoords[i.tid] = coords
+                const dv = 0 #-1.0
+                const d = 0.0 #1.0
 
-            var subimageCoords: array[4, float32]
-            subimageCoords[0] = coords[2]
-            subimageCoords[1] = coords[3]
-            subimageCoords[2] = coords[10]
-            subimageCoords[3] = coords[7]
+                var coords: array[16, float32]
+                coords[0] = dv
+                coords[1] = dv + yOff
+                coords[2] = (r.x.Coord + d) / texWidth.Coord
+                coords[3] = (r.y.Coord + d) / texHeight.Coord
 
-            let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
-            tm.setImageForTile(i.tid, sub)
+                coords[4] = dv
+                coords[5] = sz.height + yOff - dv
+                coords[6] = (r.x.Coord + d) / texWidth.Coord
+                coords[7] = (r.maxY - d) / texHeight.Coord
+
+                coords[8] = sz.width - dv
+                coords[9] = sz.height + yOff - dv
+                coords[10] = (r.maxX - d) / texWidth.Coord
+                coords[11] = (r.maxY - d) / texHeight.Coord
+
+                coords[12] = sz.width - dv
+                coords[13] = 0 + yOff + dv
+                coords[14] = (r.maxX - d) / texWidth.Coord
+                coords[15] = (r.y + d) / texHeight.Coord
+                tm.tileVCoords[i.tid] = coords
+
+                var subimageCoords: array[4, float32]
+                subimageCoords[0] = coords[2]
+                subimageCoords[1] = coords[3]
+                subimageCoords[2] = coords[10]
+                subimageCoords[3] = coords[7]
+
+                let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
+                tm.setImageForTile(i.tid, sub)
+            else: 
+                warn "pack ", i.image.filePath, " doesnt fit ", i.image.size
 
     endDraw(tm.mTilesSpriteSheet, gfs)
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
@@ -939,6 +943,24 @@ proc removeLayer*(tm: TileMap, name: string)=
 
 # method serialize*(c: TileMap, s: Serializer): JsonNode=
 #     result = newJObject()
+
+
+method visitProperties*(tm: BaseTileMapLayer, p: var PropertyVisitor) =
+    if not tm.properties.isNil:
+        for k, v in tm.properties:
+            case v.kind:
+            of lptString:
+                p.visitProperty(k, v.strVal)
+            of lptBool:
+                p.visitProperty(k, v.boolVal)
+            of lptColor:
+                p.visitProperty(k, v.colorVal)
+            of lptFloat:
+                p.visitProperty(k, v.floatVal)
+            of lptInt:
+                p.visitProperty(k, v.intVal)
+            else: 
+                discard
 
 method visitProperties*(tm: TileMap, p: var PropertyVisitor) =
     p.visitProperty("mapSize", tm.mapSize)
@@ -1120,7 +1142,39 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
 
                 if layerCreator.isNil:
                     if layerType == "group":
+                        var grps: JsonNode
+                        var grpt: JsonNode
+                        if "propertytypes" in jl and "properties" in jl:
+                            grps = jl["properties"]
+                            grpt = jl["propertytypes"]
+
+                        let inheritProperties = not grps.isNil and not grpt.isNil
+
                         for jLayer in jl["layers"]:
+                            ## properties inheritance
+                            if inheritProperties:
+                                var chps: JsonNode
+                                var chpt: JsonNode
+                                if "propertytypes" in jLayer and "properties" in jLayer:
+                                    chpt = jLayer["propertytypes"]
+                                    chps = jLayer["properties"]
+
+                                if chps.isNil:
+                                    chps = newJObject()
+                                if chpt.isNil:
+                                    chpt = newJObject()
+                                
+                                for pk, pv in grps:
+                                    if pk notin chps:
+                                        chps[pk] = pv
+
+                                for pk, pv in grpt:
+                                    if pk notin chpt:
+                                        chpt[pk] = pv
+
+                                jLayer["properties"] = chps
+                                jLayer["propertytypes"] = chpt
+
                             tm.parseLayer(jLayer, position, enabled)
                     else:
                         warn "TileMap loadTiled: ", layerType, " doesn't supported!"
@@ -1154,6 +1208,7 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                 tm.layers.add(layer)
 
                 layer.properties = getProperties(tm, jl, layer)
+                
             for jl in jtm["layers"]:
                 tm.parseLayer(jl)
 
@@ -1183,13 +1238,14 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                     let ts = loadTileSet(jts, serializer, tm)
                     if not ts.isNil:
                         tm.tileSets.add(ts)
-
+            
         serializer.finish()
 
 proc loadTiledWithResource*(tm: TileMap, path: string) =
     var done = false
     tm.loadTiledWithUrl("res://" & path) do():
-        done = true
+        done = true    
+
         echo "done loadTiledWithResource"
     if not done:
         echo "failed loadTiledWithResource"

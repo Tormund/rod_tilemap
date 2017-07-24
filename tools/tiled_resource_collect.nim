@@ -1,9 +1,13 @@
-import json, strutils
+import json, strutils, tables
 import ospaths, os, parseopt2
 
 var destinationPath: string
 const imageLayersPath = "layers"
 const tilesetsPath = "../tiles"
+
+var usedGids = newCountTable[int]()
+var unusedTiles = newSeq[string]()
+var removeUnused = false
 
 proc moveImageFile(jstr: JsonNode, k: string, pathTo: string) =
     var path = jstr[k].str
@@ -54,7 +58,7 @@ proc moveTilesetFile(jstr: JsonNode, k: string)=
     echo "COPY FILE: TILESET: ", path, " to ", copyTo
     copyFile(path, copyTo)
 
-proc readTileSet(jn: JsonNode, pathFrom: string = nil)=
+proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
     let spFile = splitFile(pathFrom)
     let tdest = jn["name"].str
     let integrated = pathFrom.isNil
@@ -80,13 +84,35 @@ proc readTileSet(jn: JsonNode, pathFrom: string = nil)=
                     tile["propertytypes"] = newJObject()
                 for key, value in jn["tilepropertytypes"][key]:
                     tile["propertytypes"][key] = value
+        
+        if removeUnused:
+            var tiles = newJObject()
+            for k, v in jn["tiles"]:
+                let gid = k.parseInt() + firstgid
+                if  gid in usedGids:
+                    try:
+                        v.moveTileFile("image", spFile.dir, tdest, integrated)
+                        tiles[k] = v
 
-        for k, v in jn["tiles"]:
-            try:
-                v.moveTileFile("image", spFile.dir, tdest, integrated)
-            except OSError:
-                when not defined(safeMode):
-                    raise
+                    except OSError:
+                        when not defined(safeMode):
+                            raise
+                else:
+                    unusedTiles.add(v["image"].str)
+
+            jn["tiles"] = tiles
+
+        else:
+            for k, v in jn["tiles"]:
+                let gid = k.parseInt() + firstgid
+                if gid notin usedGids:
+                    unusedTiles.add(v["image"].str)
+
+                try:
+                    v.moveTileFile("image", spFile.dir, tdest, integrated)
+                except OSError:
+                    when not defined(safeMode):
+                        raise
 
     if not integrated:
         writeFile(destinationPath & '/' & tilesetsPath & '/' & spFile.name & ".json", $jn)
@@ -124,7 +150,7 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
                     else:
                         echo "Image has not been founded. Skip layer."
                         continue
-
+            
         if "data" in layer:
             let jdata = layer["data"]
             var data = newSeq[int]()
@@ -148,6 +174,8 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
 
                     let off = y * width + x
                     if data[off] != 0:
+                        usedGids.inc(data[off], 1)
+
                         if x > maxX: maxX = x
                         if x < minX: minX = x
                         if y > maxY: maxY = y
@@ -176,6 +204,7 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
                 layer["actualSize"] = actualSize
 
             layer["data"] = newData
+
     jNode["layers"] = layers
 
 
@@ -198,8 +227,12 @@ proc readTiledFile(path: string)=
                 if sf.ext == ".json":
                     let jFile = parseFile(originalPath)
                     try:
+                        var firstgid = 0
+                        if "firstgid" in jts:
+                            firstgid = jts["firstgid"].num.int
+
                         jts.moveTilesetFile("source")
-                        readTileSet(jFile, originalPath)
+                        readTileSet(jFile, firstgid, originalPath)
                     except OSError:
                         when not defined(safeMode):
                             raise
@@ -209,7 +242,10 @@ proc readTiledFile(path: string)=
                         raise newException(Exception, "Incorrect tileSet format by " & originalPath)
 
             else:
-                readTileSet(jts)
+                var firstgid = 0
+                if "firstgid" in jts:
+                    firstgid = jts["firstgid"].num.int
+                readTileSet(jts, firstgid)
 
     writeFile(destinationPath & "/" & tmpSplit.name & tmpSplit.ext, $jTiled)
 
@@ -220,6 +256,9 @@ proc main()=
             inFileName = val
         elif key == "dest":
             destinationPath = val
+        elif key == "opt":
+            removeUnused = parseBool(val)
+
         discard
     echo "tiled_resource_collect inFileName ", inFileName, " destinationPath ", destinationPath
     if inFileName.len > 0:
@@ -227,5 +266,11 @@ proc main()=
             echo "\n\n Running in safeMode !!\n\n"
 
         readTiledFile(inFileName)
+
+        echo "\n\n usedGids "
+        for k, v in usedGids:
+            echo "gid: ", k, " used: ", v
+        # usedGids
+        echo "\n\n unused tiles ", unusedTiles
 
 main()
