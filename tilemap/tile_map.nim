@@ -2,11 +2,12 @@ import rod / [ component, node, viewport, rod_types ]
 import rod / component / [ sprite ]
 import rod / tools / [ serializer, debug_draw ]
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
-                render_to_image, rect_packer ]
+                render_to_image ]
 
 import json, tables, strutils, logging, sequtils, algorithm, math
 import nimx.assets.asset_loading
 import boolseq
+import rect_packer
 
 type
     LayerRange* = tuple
