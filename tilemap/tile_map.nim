@@ -1,5 +1,5 @@
 import rod / [ component, node, viewport, rod_types ]
-import rod / component / [ sprite ]
+import rod / component / [ sprite, camera ]
 import rod / tools / [ serializer, debug_draw ]
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
                 render_to_image ]
@@ -72,6 +72,8 @@ type
         image*: Image
 
     NodeMapLayer* = ref object of BaseTileMapLayer
+        bbox: BBox
+        isBBoxCalculated: bool
 
     BaseTileSet = ref object of RootObj
         tileSize: Vector3
@@ -100,6 +102,7 @@ type
 
         objects: seq[Node]
         objectLayerBreaks: seq[int]
+        bbox: BBox
 
     TileMap* = ref object of Component
         mapSize*: Size
@@ -439,6 +442,92 @@ proc prepareVBOs(tm: TileMap) =
     gl.enableVertexAttribArray(saPosition.GLuint)
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, tm.quadIndexBuffer)
 
+# =================== BBox logic ==================
+proc hasDimension*(bb: BBox): bool =
+    let diff = bb.maxPoint - bb.minPoint
+    if abs(diff.x) > 0 or abs(diff.y) > 0:
+        return true
+
+proc minVector(a,b: Vector3):Vector3=
+    result = newVector3(min(a.x, b.x), min(a.y, b.y), min(a.z, b.z))
+
+proc maxVector(a,b:Vector3):Vector3=
+    result = newVector3(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z))
+
+proc getBBox(n: Node): BBox =
+    var index = 0
+    # get start point
+    for i, comp in n.components:
+        let bb = comp.getBBox()
+
+        if bb.hasDimension():
+            result.minPoint = bb.minPoint
+            result.maxPoint = bb.maxPoint
+            index = i + 1
+            break
+
+    while index < n.components.len:
+        let comp = n.components[index]
+        index.inc()
+
+        let bb = comp.getBBox()
+        if bb.hasDimension():
+            result.minPoint = minVector(result.minPoint, bb.minPoint)
+            result.maxPoint = maxVector(result.maxPoint, bb.maxPoint)
+
+proc nodeBounds2d(n: Node, minP: var Vector3, maxP: var Vector3) =
+    let wrldMat = n.worldTransform()
+    var wp0, wp1, wp2, wp3: Vector3
+
+    let bb = n.getBBox()
+    if bb.hasDimension:
+        wp0 = wrldMat * bb.minPoint
+        wp1 = wrldMat * newVector3(bb.minPoint.x, bb.maxPoint.y, 0.0)
+        wp2 = wrldMat * bb.maxPoint
+        wp3 = wrldMat * newVector3(bb.maxPoint.x, bb.minPoint.y, 0.0)
+
+        minP = minVector(minP, wp0)
+        minP = minVector(minP, wp1)
+        minP = minVector(minP, wp2)
+        minP = minVector(minP, wp3)
+
+        maxP = maxVector(maxP, wp0)
+        maxP = maxVector(maxP, wp1)
+        maxP = maxVector(maxP, wp2)
+        maxP = maxVector(maxP, wp3)
+
+    for ch in n.children:
+        ch.nodeBounds2d(minP, maxP)
+
+const absMinPoint = newVector3(high(int).Coord, high(int).Coord, high(int).Coord)
+const absMaxPoint = newVector3(low(int).Coord, low(int).Coord, low(int).Coord)
+
+proc nodeBounds(n: Node): BBox=
+    var minP = absMinPoint
+    var maxP = absMaxPoint
+    n.nodeBounds2d(minP, maxP)
+    if minP != absMinPoint and maxP != absMaxPoint:
+        result.minPoint = minP
+        result.maxPoint = maxP
+
+proc getBBox(ml: NodeMapLayer): BBox =
+    if not ml.isBBoxCalculated:
+        ml.bbox = ml.node.nodeBounds()
+        ml.isBBoxCalculated = true
+
+    result = ml.bbox
+
+proc getBBox(dr: DrawingRow): BBox =
+    for n in dr.objects:
+        result.minPoint = minVector(result.minPoint, n.nodeBounds().minPoint)
+        result.maxPoint = maxVector(result.maxPoint, n.nodeBounds().maxPoint)
+
+#================   BBox     ======================
+
+proc intersectFrustum*(f: Frustum, bbox: BBox): bool =
+    if f.min.x < bbox.maxPoint.x and bbox.minPoint.x < f.max.x and f.min.y < bbox.maxPoint.y and bbox.minPoint.y < f.max.y:
+        return true
+
 method beforeDraw*(tm: TileMap, index: int): bool =
     result = true # Prevent child nodes from drawing. We shall draw them.
     if tm.drawingRows.len == 0: return
@@ -449,8 +538,9 @@ method beforeDraw*(tm: TileMap, index: int): bool =
     let gl = c.gl
 
     var vboStateValid = false
-    var iTileLayer = 0  
+    var iTileLayer = 0
     let vpm = tm.node.sceneView.viewProjMatrix
+    let frustum = tm.node.sceneView.camera.getFrustum()
 
     for layer in tm.layers:
         if layer.node.enabled:
@@ -467,6 +557,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                         let quadStartIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer]
                         let quadEndIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer + 1]
                         let numQuads = quadEndIndex - quadStartIndex
+                        let row = tm.drawingRows[i]
 
                         if numQuads != 0:
                             if not vboStateValid:
@@ -475,10 +566,11 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
                             const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
 
-                            gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
-                            gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
+                            if frustum.intersectFrustum(row.bbox):
+                                gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
+                                gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
 
-                            gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
+                                gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
 
                         let objectStartIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer]
                         let objectEndIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]
@@ -496,16 +588,18 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                     vboStateValid = false
                     var r: Rect
                     r.size = iml.image.size
-                    # r.origin = newPoint(iml.node.position.x, iml.node.position.y)
-                    # layer.node.isDirty = true
-                    # assert(not layer.node.parent.isNil)
                     c.withTransform(vpm * layer.node.worldTransform):
                         c.drawImage(iml.image, r, alpha = iml.node.alpha)
 
             elif layer of NodeMapLayer:
                 vboStateValid = false
                 let impl = NodeMapLayer(layer)
-                impl.node.recursiveDraw()
+
+                let bb = impl.getBBox()
+                if frustum.intersectFrustum(bb):
+                    impl.node.recursiveDraw()
+                # DDdrawRect(newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y))
+                # DDdrawText(impl.node.name, newPoint(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY), 32, newColor(1.0, 0.0, 0.0, 1.0))
 
 method imageForTile(ts: BaseTileSet, tid: int16): Image {.base.} = discard
 
@@ -580,23 +674,6 @@ proc itemsForPropertyValue*[T](tm: TileMap, key: string, value: T): seq[TileMapP
                     if item.property.fileVal == value:
                         result.add(item)
 
-# method getBBox*(tm: TileMap): BBox =
-#     result.maxPoint = newVector3(low(int).Coord/2.0, low(int).Coord/2.0, 1.0)
-#     result.minPoint = newVector3(high(int).Coord/2.0, high(int).Coord/2.0, 0.0)
-
-#     for l in tm.layers:
-#         if l of TileMapLayer:
-#             let r = tm.layerRect(l.TileMapLayer)
-#             if r.x < result.minPoint.x:
-#                 result.minPoint.x = r.x
-#             if r.y < result.minPoint.y:
-#                 result.minPoint.y = r.y
-#             if r.width + r.x > result.maxPoint.x:
-#                 result.maxPoint.x = r.width + r.x
-#             if r.height + r.y > result.maxPoint.y:
-#                 result.maxPoint.y = r.height + r.y
-
-#     echo "getBBox tiledmap ", [result.minPoint, result.maxPoint]
 
 proc staggeredYTileRect(tm: TileMap, pos: int, tr: var Rect)=
     var row = (pos div tm.mapSize.width.int).float
@@ -677,7 +754,7 @@ proc getQuadDataForTile(tm: TileMap, id: int16, quadData: var array[16, float32]
         quadData = tm.tileVCoords[id]
         result = true
 
-proc offsetVertexData(data: var array[16, float32], xOff, yOff: float32) {.inline.} =
+proc offsetVertexData(data: var array[16, float32], xOff, yOff: float32, minY, maxY: var float32) {.inline.} =
     data[0] += xOff
     data[1] += yOff
     data[4] += xOff
@@ -687,11 +764,14 @@ proc offsetVertexData(data: var array[16, float32], xOff, yOff: float32) {.inlin
     data[12] += xOff
     data[13] += yOff
 
-proc addTileToVertexData(tm: TileMap, id: int16, xOff, yOff: float32, data: var seq[float32]): bool {.inline.} =
+    minY = min(minY, data[1])
+    maxY = max(maxY, data[5])
+
+proc addTileToVertexData(tm: TileMap, id: int16, xOff, yOff: float32, data: var seq[float32], minY, maxY: var float32): bool {.inline.} =
     var quadData: array[16, float32]
     result = tm.getQuadDataForTile(id, quadData)
     if result:
-        offsetVertexData(quadData, xOff, yOff)
+        offsetVertexData(quadData, xOff, yOff, minY, maxY)
         data.add(quadData)
 
 proc createObjectForTile(tm: TileMap, id: int16, xOff, yOff: float32): Node =
@@ -713,6 +793,12 @@ proc updateWithVertexData(row: var DrawingRow, vertexData: openarray[float32]) {
 proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
     let tileY = index div 2
     let odd = index mod 2 # 1 if row is odd, 0 otherwise
+    var x_min = Inf
+    var x_max = -Inf
+    var y_min: float32 = Inf
+    var y_max: float32 = -Inf
+    var minOffset = Inf
+    var maxOffset = -Inf
 
     if row.vboLayerBreaks.isNil:
         row.vboLayerBreaks = @[]
@@ -769,18 +855,33 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
 
                     let xOff = Coord(tileX + tml.actualSize.minx) * tm.tileSize.x / 2 #+ tml.offset.width
                     #echo "xOff: ", xOff
-
+                    # let yOff = Coord(tileY + tml.actualSize.miny) * tm.tileSize.x / 2
+                    # if tile == 197:
                     if tile != 0:
-                        if not tm.addTileToVertexData(tile, xOff, yOff, vertexData):
+                        if not tm.addTileToVertexData(tile, xOff, yOff, vertexData, y_min, y_max):
                             let n = tm.createObjectForTile(tile, xOff, yOff)
                             if not n.isNil:
                                 layer.node.addChild(n)
                                 if row.objects.isNil: row.objects = @[]
                                 row.objects.add(n)
+                                let bb = n.nodeBounds()
+                                x_min = min(x_min, bb.minPoint.x)
+                                x_max = max(x_max, bb.maxPoint.x)
+                                y_min = min(y_min, bb.minPoint.y)
+                                y_max = max(y_max, bb.maxPoint.y)
                             else:
                                 echo "TILE NOT FOUND: ", tile
 
+                        else:
+                            x_min = min(x_min, vertexData[0])
+                            x_max = max(x_max, xOff)
+                            minOffset = min(minOffset, tml.offset.height)
+                            maxOffset = max(maxOffset, tml.offset.height)
+
                     i += 2
+
+    row.bbox.minPoint = newVector3(x_min, y_min + minOffset, 0.0)
+    row.bbox.maxPoint = newVector3(x_max, y_max + maxOffset, 0.0)
 
     addLayerBreak()
     row.updateWithVertexData(vertexData)
@@ -796,25 +897,25 @@ proc packAllTilesToSheet(tm: TileMap) =
     for ts in tm.tileSets:
         ts.getAllImages(allImages)
 
-    const maxWidth = 700
-    const maxHeight = 400
+    const maxWidth = 1400
+    const maxHeight = 800
 
     allImages.keepItIf:
         let sz = it.image.size
         sz.width < maxWidth and sz.height < maxHeight
 
     allImages.sort() do(i1, i2: TidAndImage) -> int:
-        let sz1 = i1.image.size
-        let sz2 = i2.image.size
+        let sz2 = i1.image.size
+        let sz1 = i2.image.size
         cmp(sz1.width * sz1.height, sz2.width * sz2.height)
-    
+
     let c = currentContext()
     let gl = c.gl
 
     var maxTextureSize = gl.getParami(gl.MAX_TEXTURE_SIZE)
-    let texWidth = min(2048, maxTextureSize)
+    let texWidth = min(4096, maxTextureSize)
     let texHeight = min(4096, maxTextureSize)
-    
+
     info "[TileMap::packAllTilesToSheet] maxTextureSize ", maxTextureSize
 
     assert(isPowerOfTwo(texWidth) and isPowerOfTwo(texHeight))
@@ -823,7 +924,7 @@ proc packAllTilesToSheet(tm: TileMap) =
 
     var gfs: GlFrameState
     beginDraw(tm.mTilesSpriteSheet, gfs)
-    
+
     gl.blendFunc(gl.ONE, gl.ZERO)
     c.withTransform ortho(0, texWidth.Coord, 0, texHeight.Coord, -1, 1):
         var rp = newPacker(texWidth.int32, texHeight.int32)
@@ -838,7 +939,7 @@ proc packAllTilesToSheet(tm: TileMap) =
             const margin = 4 # Hack
 
             let p = rp.pack(sz.width.int32 + margin * 2, sz.height.int32 + margin * 2)
-            if p.hasSpace: 
+            if p.hasSpace:
                 #echo "pos: ", p
 
                 var r: Rect
@@ -900,7 +1001,7 @@ proc packAllTilesToSheet(tm: TileMap) =
 
                 let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
                 tm.setImageForTile(i.tid, sub)
-            else: 
+            else:
                 warn "pack ", i.image.filePath, " doesnt fit ", i.image.size
 
     endDraw(tm.mTilesSpriteSheet, gfs)
@@ -960,7 +1061,7 @@ method visitProperties*(tm: BaseTileMapLayer, p: var PropertyVisitor) =
                 p.visitProperty(k, v.floatVal)
             of lptInt:
                 p.visitProperty(k, v.intVal)
-            else: 
+            else:
                 discard
 
 method visitProperties*(tm: TileMap, p: var PropertyVisitor) =
@@ -1164,7 +1265,7 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                                     chps = newJObject()
                                 if chpt.isNil:
                                     chpt = newJObject()
-                                
+
                                 for pk, pv in grps:
                                     if pk notin chps:
                                         chps[pk] = pv
@@ -1209,7 +1310,7 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                 tm.layers.add(layer)
 
                 layer.properties = getProperties(tm, jl, layer)
-                
+
             for jl in jtm["layers"]:
                 tm.parseLayer(jl)
 
@@ -1239,13 +1340,13 @@ proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
                     let ts = loadTileSet(jts, serializer, tm)
                     if not ts.isNil:
                         tm.tileSets.add(ts)
-            
+
         serializer.finish()
 
 proc loadTiledWithResource*(tm: TileMap, path: string) =
     var done = false
     tm.loadTiledWithUrl("res://" & path) do():
-        done = true    
+        done = true
 
         echo "done loadTiledWithResource"
     if not done:
