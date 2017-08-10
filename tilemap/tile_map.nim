@@ -1006,7 +1006,6 @@ proc packAllTilesToSheet(tm: TileMap) =
 
     endDraw(tm.mTilesSpriteSheet, gfs)
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
-    # tm.mTilesSpriteSheet.writeToPNGFile("/Users/rrenderr/Documents/im.png")
 
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
