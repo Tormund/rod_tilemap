@@ -897,8 +897,8 @@ proc packAllTilesToSheet(tm: TileMap) =
     for ts in tm.tileSets:
         ts.getAllImages(allImages)
 
-    const maxWidth = 1400
-    const maxHeight = 800
+    const maxWidth = 800
+    const maxHeight = 500
 
     allImages.keepItIf:
         let sz = it.image.size
