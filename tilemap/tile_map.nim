@@ -857,9 +857,6 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
     var minOffset = Inf
     var maxOffset = -Inf
 
-    var y_min_t: float32 = Inf
-    var y_max_t: float32 = -Inf
-
     if row.vboLayerBreaks.isNil:
         row.vboLayerBreaks = @[]
     else:
