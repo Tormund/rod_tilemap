@@ -8,6 +8,7 @@ import json, tables, strutils, logging, sequtils, algorithm, math
 import nimx.assets.asset_loading
 import boolseq
 import rect_packer
+import opengl
 
 type
     LayerRange* = tuple
@@ -104,6 +105,11 @@ type
         objectLayerBreaks: seq[int]
         bbox: BBox
 
+    DebugRenderData = object
+        rect: Rect
+        text: string
+        nodeCount: int
+
     TileMap* = ref object of Component
         mapSize*: Size
         tileSize*: Vector3
@@ -127,7 +133,11 @@ type
             isStaggerIndexOdd: bool
         else: discard
 
+        debugObjects: seq[DebugRenderData]
+        debugMaxNodes: int
+
     TidAndImage = tuple[image: Image, tid: int16]
+
 
 proc newNodeMapLayer*(node: Node, map: TileMap, size: Size = zeroSize, offset: Size = zeroSize, actualSize: LayerRange = (0, 0, 0, 0)): NodeMapLayer =
     NodeMapLayer(
@@ -517,12 +527,40 @@ proc getBBox(ml: NodeMapLayer): BBox =
 
     result = ml.bbox
 
+proc getNodeCount(ml: NodeMapLayer): int =
+    proc recursiveChildrenCount(n: Node, count: var int) =
+        if not n.children.isNil:
+            count += n.children.len()
+
+            for c in n.children:
+                c.recursiveChildrenCount(count)
+
+    result = 1
+    ml.node.recursiveChildrenCount(result)
+
 proc getBBox(dr: DrawingRow): BBox =
     for n in dr.objects:
         result.minPoint = minVector(result.minPoint, n.nodeBounds().minPoint)
         result.maxPoint = maxVector(result.maxPoint, n.nodeBounds().maxPoint)
 
 #================   BBox     ======================
+
+proc greenTored(p: float32): Color =
+    var v = p
+    result.a = 1.0
+    if v < 0.5:
+        result.r = v * 2.0
+        result.g = 1.0
+    else:
+        result.r = 1.0
+        result.g = 1.0 - (v - 0.5) * 2.0
+
+proc setDebugMaxNodes*(tm: TileMap, count: int) =
+    tm.debugMaxNodes = count
+    if count > 0:
+        tm.debugObjects = newSeq[DebugRenderData]()
+    else:
+        tm.debugObjects = nil
 
 proc intersectFrustum*(f: Frustum, bbox: BBox): bool =
     if f.min.x < bbox.maxPoint.x and bbox.minPoint.x < f.max.x and f.min.y < bbox.maxPoint.y and bbox.minPoint.y < f.max.y:
@@ -598,8 +636,27 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                 let bb = impl.getBBox()
                 if frustum.intersectFrustum(bb):
                     impl.node.recursiveDraw()
-                # DDdrawRect(newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y))
-                # DDdrawText(impl.node.name, newPoint(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY), 32, newColor(1.0, 0.0, 0.0, 1.0))
+
+                if not tm.debugObjects.isNil:
+                    var dd: DebugRenderData
+                    dd.rect = newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y)
+                    dd.text = impl.node.name & " n= " & $impl.getNodeCount()
+                    dd.nodeCount = impl.getNodeCount()
+                    tm.debugObjects.add(dd)
+
+
+    if not tm.debugObjects.isNil:
+        for i, dd in tm.debugObjects:
+            var p = dd.nodeCount.float / tm.debugMaxNodes.float
+            if p > 1.0: p = 1.0
+            let color = greenTored(p)
+
+            glLineWidth(5.0 * p)
+            DDdrawRect(dd.rect, color)
+            DDdrawText(dd.text, dd.rect.origin, 38, color)
+
+        tm.debugObjects.setLen(0)
+        glLineWidth(1.0)
 
 method imageForTile(ts: BaseTileSet, tid: int16): Image {.base.} = discard
 
@@ -800,6 +857,9 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
     var minOffset = Inf
     var maxOffset = -Inf
 
+    var y_min_t: float32 = Inf
+    var y_max_t: float32 = -Inf
+
     if row.vboLayerBreaks.isNil:
         row.vboLayerBreaks = @[]
     else:
@@ -897,8 +957,8 @@ proc packAllTilesToSheet(tm: TileMap) =
     for ts in tm.tileSets:
         ts.getAllImages(allImages)
 
-    const maxWidth = 1400
-    const maxHeight = 800
+    const maxWidth = 800
+    const maxHeight = 500
 
     allImages.keepItIf:
         let sz = it.image.size
