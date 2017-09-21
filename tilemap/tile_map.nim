@@ -1,6 +1,9 @@
 import rod / [ component, node, viewport, rod_types ]
 import rod / component / [ sprite, camera ]
 import rod / tools / [ serializer, debug_draw ]
+import rod / utils / [ serialization_codegen ]
+from rod.utils.property_desc import nil
+
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
                 render_to_image ]
 
@@ -12,54 +15,13 @@ import opengl
 
 type
     LayerRange* = tuple
-        minx, maxx: int
-        miny, maxy: int
-
-    PropertyType* = enum
-        lptString = "string"
-        lptFloat = "float"
-        lptInt = "int"
-        lptBool = "bool"
-        lptColor = "color"
-        lptFile = "file"
-
-    Property* = ref object
-        case kind*: PropertyType:
-            of lptString:
-                strVal*: string
-            of lptFloat:
-                floatVal*: float
-            of lptInt:
-                intVal*: int
-            of lptBool:
-                boolVal*: bool
-            of lptColor:
-                colorVal*: Color
-            of lptFile:
-                fileVal*: string
-
-    Properties* = TableRef[string, Property]
-
-    TileMapPropertyType* = enum
-        tmlptLayer
-        tmlptTileset
-        tmlptTile
-
-    TileMapProperty* = object
-        property*: Property
-        case kind*: TileMapPropertyType:
-            of tmlptLayer:
-                layer*: BaseTileMapLayer
-            of tmlptTileset:
-                tileset*: BaseTileSet
-            of tmlptTile:
-                tid*: int16
-
-    TileMapPropertyCollection = object
-        collection: seq[TileMapProperty]
+        minx, miny: int32
+        maxx, maxy: int32
+    
+    Properties* = TableRef[string, JsonNode]
 
     BaseTileMapLayer* = ref object of Component
-        size: Size
+        size*: Size
         offset*: Size
         actualSize*: LayerRange
         map*: TileMap
@@ -76,19 +38,21 @@ type
         bbox: BBox
         isBBoxCalculated: bool
 
-    BaseTileSet = ref object of RootObj
-        tileSize: Vector3
-        firstGid: int
-        tilesCount: int
-        name: string
+    BaseTileSet* = ref object of RootObj
+        tileSize*: Vector3
+        firstGid*: int
+        tilesCount*: int
+        name*: string
         properties*: Properties
 
-    TileSheet = ref object of BaseTileSet
-        sheet: Image
-        columns: int
+    TileSheet* = ref object of BaseTileSet
+        sheet*: Image
+        columns*: int
 
-    TileCollection = ref object of BaseTileSet
-        collection: seq[tuple[image: Image, properties: Properties]]
+    Tile* = tuple[image: Image, properties: Properties]
+
+    TileCollection* = ref object of BaseTileSet
+        collection*: seq[Tile]
 
     TileMapOrientation* {.pure.}= enum
         orthogonal
@@ -113,8 +77,12 @@ type
     TileMap* = ref object of Component
         mapSize*: Size
         tileSize*: Vector3
-        layers: seq[BaseTileMapLayer]
-        tileSets: seq[BaseTileSet]
+        layers*: seq[BaseTileMapLayer]
+        tileSets*: seq[BaseTileSet]
+        mOrientation*: TileMapOrientation    
+        isStaggerIndexOdd*: bool
+        properties*: Properties
+
         tileDrawRect: proc(tm: TileMap, pos: int, tr: var Rect)
         mQuadIndexBuffer: BufferRef
         maxQuadsInRun: int
@@ -122,24 +90,49 @@ type
         mProgram: ProgramRef
         mTilesSpriteSheet: SelfContainedImage
         enabledLayers: BoolSeq
-
         tileVCoords: Table[int16, array[16, float32]]
-        properties: Table[string, TileMapPropertyCollection]
-
         drawingRows: seq[DrawingRow]
-
-        case mOrientation: TileMapOrientation
-        of TileMapOrientation.staggeredX, TileMapOrientation.staggeredY:
-            isStaggerIndexOdd: bool
-        else: discard
-
         debugObjects: seq[DebugRenderData]
         debugMaxNodes: int
 
     TidAndImage = tuple[image: Image, tid: int16]
 
+    RawProperties = tuple[name: string, value: string]
+    RawTile = tuple[id: int32, image: Image, rawProperties:seq[RawProperties]]
+    TileSetRaw = tuple
+        collection: seq[RawTile] # TileCollection
+        tileSize: Vector3
+        firstgid: int32
+        tilesCount: int32
+        columns: int32  # TileSheet
+        name: string
+        image: Image # TileSheet
+        properties: seq[RawProperties]
 
-proc newNodeMapLayer*(node: Node, map: TileMap, size: Size = zeroSize, offset: Size = zeroSize, actualSize: LayerRange = (0, 0, 0, 0)): NodeMapLayer =
+property_desc.properties(TileMap):
+    rawProperties(phantom = seq[RawProperties])
+    tileSets(phantom = seq[TileSetRaw])
+    tileSize #vector3
+    mapSize #size
+    mOrientation #enum
+    isStaggerIndexOdd #bool
+
+property_desc.properties(TileMapLayer):
+    rawProperties(phantom = seq[RawProperties])
+    data #seq[int16]
+    actualSize #tuple 
+    tileSize #vector3
+    size #size
+    offset #size
+
+property_desc.properties(ImageMapLayer):
+    rawProperties(phantom = seq[RawProperties])
+    image #Image
+    actualSize #tuple 
+    size #size
+    offset #size
+
+proc newNodeMapLayer*(node: Node, map: TileMap, size: Size = zeroSize, offset: Size = zeroSize, actualSize: LayerRange = (0'i32, 0'i32, 0'i32, 0'i32)): NodeMapLayer =
     NodeMapLayer(
         size: size,
         offset: offset,
@@ -147,27 +140,6 @@ proc newNodeMapLayer*(node: Node, map: TileMap, size: Size = zeroSize, offset: S
         map: map,
         node: node
     )
-
-proc newProperty(kind: PropertyType, value: JsonNode): Property =
-    case kind:
-        of lptString:
-            result = Property(kind: lptString, strVal: value.getStr())
-        of lptFloat:
-            result = Property(kind: lptFloat, floatVal: value.getFNum())
-        of lptInt:
-            result = Property(kind: lptInt, intVal: value.getNum().int)
-        of lptBool:
-            result = Property(kind: lptBool, boolVal: value.getBVal())
-        of lptColor:
-            let color = value.getStr()
-            let a = color[1..2].parseHexInt().float / 255.0
-            let r = color[3..4].parseHexInt().float
-            let g = color[5..6].parseHexInt().float
-            let b = color[7..8].parseHexInt().float
-            result = Property(kind: lptColor, colorVal: newColor(r, g, b, a))
-        of lptFile:
-            result = Property(kind: lptFile, fileVal: value.getStr())
-
 
 const vertexShader = """
 attribute vec4 aPosition;
@@ -203,52 +175,51 @@ proc rebuildAllRowsIfNeeded(tm: TileMap)
 method init*(tm: TileMap) =
     procCall tm.Component.init()
     tm.drawingRows = @[]
-    tm.properties = initTable[string, TileMapPropertyCollection]()
 
-proc position*(l: BaseTileMapLayer): Vector3=
-    return l.node.position
+proc position*(lay: BaseTileMapLayer): Vector3=
+    return lay.node.position
 
-proc alpha*(l: BaseTileMapLayer): float=
-    return l.node.alpha
+proc alpha*(lay: BaseTileMapLayer): float=
+    return lay.node.alpha
 
-proc enabled*(l: BaseTileMapLayer): bool=
-    return l.node.enabled
+proc enabled*(lay: BaseTileMapLayer): bool=
+    return lay.node.enabled
 
-proc `enabled=`*(l: BaseTileMapLayer, v: bool) =
-    l.node.enabled = v
+proc `enabled=`*(lay: BaseTileMapLayer, v: bool) =
+    lay.node.enabled = v
 
-proc name*(l: BaseTileMapLayer): string =
-    return l.node.name
+proc name*(lay: BaseTileMapLayer): string =
+    return lay.node.name
 
-proc layerSize(l: TileMapLayer): Size=
-    return newSize((l.actualSize.maxx - l.actualSize.minx).float, (l.actualSize.maxy - l.actualSize.miny).float)
+proc layerSize(lay: TileMapLayer): Size=
+    return newSize((lay.actualSize.maxx - lay.actualSize.minx).float, (lay.actualSize.maxy - lay.actualSize.miny).float)
 
-proc layerRect(tm: TileMap, l: TileMapLayer): Rect =
-    let layerSize = l.layerSize
+proc layerRect(tm: TileMap, lay: TileMapLayer): Rect =
+    let layerSize = lay.layerSize
     case tm.mOrientation:
     of TileMapOrientation.orthogonal:
-        result = newRect(l.position.x, l.position.y, layerSize.width * l.tileSize.x, layerSize.height * l.tileSize.y)
+        result = newRect(lay.position.x, lay.position.y, layerSize.width * lay.tileSize.x, layerSize.height * lay.tileSize.y)
 
     of TileMapOrientation.isometric:
         let
-            width = (layerSize.width + layerSize.height) * l.tileSize.x * 0.5
-            height = (layerSize.width + layerSize.height) * l.tileSize.y * 0.5
-        result = newRect(l.position.x, l.position.y, width, height)
+            width = (layerSize.width + layerSize.height) * lay.tileSize.x * 0.5
+            height = (layerSize.width + layerSize.height) * lay.tileSize.y * 0.5
+        result = newRect(lay.position.x, lay.position.y, width, height)
 
     of TileMapOrientation.staggeredX:
-        result.origin = newPoint(l.position.x, l.position.y)
-        result.size = newSize(l.tileSize.x * (layerSize.width / 2.0 + 0.5), l.tileSize.y * (layerSize.height + 0.5))
+        result.origin = newPoint(lay.position.x, lay.position.y)
+        result.size = newSize(lay.tileSize.x * (layerSize.width / 2.0 + 0.5), lay.tileSize.y * (layerSize.height + 0.5))
 
     of TileMapOrientation.staggeredY:
-        result.origin = newPoint(l.position.x, l.position.y)
-        result.size = newSize(l.tileSize.x * (layerSize.width + 0.5), l.tileSize.y * (layerSize.height / 2.0 + 0.5))
+        result.origin = newPoint(lay.position.x, lay.position.y)
+        result.size = newSize(lay.tileSize.x * (layerSize.width + 0.5), lay.tileSize.y * (layerSize.height / 2.0 + 0.5))
 
     else:
         discard
 
-proc getViewportRect(l: TileMapLayer): Rect=
-    if not l.node.sceneView.isNil:
-        let camera = l.node.sceneView.camera
+proc getViewportRect(lay: TileMapLayer): Rect=
+    if not lay.node.sceneView.isNil:
+        let camera = lay.node.sceneView.camera
         result.size = camera.viewportSize * camera.node.scale.x
         result.origin = newPoint(camera.node.worldPos().x, camera.node.worldPos().y)
         result.origin.x = result.origin.x - camera.viewportSize.width  * 0.5 * camera.node.scale.x
@@ -256,11 +227,11 @@ proc getViewportRect(l: TileMapLayer): Rect=
 
 proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
     let layerLen = layer.data.len
-    result.miny = (r.x / ts.x).int
-    result.maxy = ((r.x + r.width) / (ts.x * 0.5)).int
+    result.miny = (r.x / ts.x).int32
+    result.maxy = ((r.x + r.width) / (ts.x * 0.5)).int32
 
-    result.minx = (r.y / ts.y).int
-    result.maxx = ((r.y + r.height) / ts.y).int
+    result.minx = (r.y / ts.y).int32
+    result.maxx = ((r.y + r.height) / ts.y).int32
 
 
 proc layerIndex*(tm: TileMap, sla: BaseTileMapLayer): int =
@@ -272,8 +243,8 @@ proc layerIndex*(tm: TileMap, sla: BaseTileMapLayer): int =
 
 proc layerIndexByName*(tm: TileMap, name: string): int =
     result = -1
-    for i, l in tm.layers:
-        if l.name == name:
+    for i, lay in tm.layers:
+        if lay.name == name:
             return i
 
 proc insertLayer*(tm: TileMap, layerNode: Node, idx: int) =
@@ -299,9 +270,9 @@ proc addLayer*(tm: TileMap, layerNode: Node, )=
     tm.insertLayer(layerNode, tm.layers.len)
 
 proc layerByName*[T](tm: TileMap, name: string): T =
-    for l in tm.layers:
-        if l.name == name and l of T:
-            return l.T
+    for lay in tm.layers:
+        if lay.name == name and lay of T:
+            return lay.T
 
 proc tileXYAtIndex*(layer: TileMapLayer, idx: int): tuple[x:int, y:int]=
     let width = layer.actualSize.maxx - layer.actualSize.minx
@@ -378,39 +349,40 @@ proc tileAtPosition*(layer: TileMapLayer, position: Vector3): int=
 
 proc tilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
     result = @[]
-    for l in tm.layers:
-        if l of TileMapLayer:
-            result.add(l.TileMapLayer.tileAtPosition(position))
+    for lay in tm.layers:
+        if lay of TileMapLayer:
+            result.add(lay.TileMapLayer.tileAtPosition(position))
 
 proc visibleTilesAtPosition*(tm: TileMap, position: Vector3): seq[int]=
     result = @[]
-    for l in tm.layers:
-        if l of TileMapLayer and l.enabled:
-            let r = l.TileMapLayer.tileAtPosition(position)
+    for lay in tm.layers:
+        if lay of TileMapLayer and lay.enabled:
+            let r = lay.TileMapLayer.tileAtPosition(position)
             if r != 0:
                 result.add(r)
 
 proc visibleTilesAtPositionDebugInfo*(tm: TileMap, position: Vector3): seq[tuple[layerName: string, x: int, y: int, tileid: int, index: int]]=
     result = @[]
-    for l in tm.layers:
-        if l of TileMapLayer and l.enabled:
-            let coords = l.TileMapLayer.tileXYAtPosition(newVector3(position.x - l.offset.width, position.y - l.offset.height))
-            let tileid = l.TileMapLayer.tileAtXY(coords.x, coords.y)
-            let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
+    for lay in tm.layers:
+        if lay of TileMapLayer and lay.enabled:
+            let coords = lay.TileMapLayer.tileXYAtPosition(newVector3(position.x - lay.offset.width, position.y - lay.offset.height))
+            let tileid = lay.TileMapLayer.tileAtXY(coords.x, coords.y)
+            let index =  lay.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
             if tileid != 0:
-                result.add((layerName: l.name, x: coords.x, y: coords.y, tileid: tileid, index: index))
+                result.add((layerName: lay.name, x: coords.x, y: coords.y, tileid: tileid, index: index))
 
 proc layerIntersectsAtPositionWithPropertyName*(tm: TileMap, position: Vector3, prop:string): seq[BaseTileMapLayer]=
     result = @[]
-    for l in tm.layers:
-        if not l.properties.isNil and prop in l.properties:
-            if l of TileMapLayer:
-                let coords = l.TileMapLayer.tileXYAtPosition(newVector3(position.x - l.offset.width, position.y - l.offset.height))
-                let tileid = l.TileMapLayer.tileAtXY(coords.x, coords.y)
-                let index =  l.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
+    for lay in tm.layers:
+        if not lay.properties.isNil and prop in lay.properties:
+            if lay of TileMapLayer:
+                let coords = lay.TileMapLayer.tileXYAtPosition(newVector3(position.x - lay.offset.width, position.y - lay.offset.height))
+                let tileid = lay.TileMapLayer.tileAtXY(coords.x, coords.y)
+                # let index =  lay.TileMapLayer.tileIndexAtXY(coords.x, coords.y)
                 if tileid != 0:
-                    result.add(l)
+                    result.add(lay)
 
+            # need raycast in sprite here
             # elif l of ImageMapLayer: # todo: implement raycasting for images by alpha
             #     let img = l.ImageMapLayer.image
             #     let pos = l.node.position
@@ -696,42 +668,6 @@ proc setImageForTile*(tm: TileMap, tid: int16, i: Image) =
     for ts in tm.tileSets:
         ts.setImageForTile(tid, i)
 
-proc itemsForPropertyName*(tm: TileMap, key: string): seq[TileMapProperty] =
-    if key in tm.properties:
-        result = tm.properties[key].collection
-    else:
-        result = @[]
-
-proc itemsForPropertyValue*[T](tm: TileMap, key: string, value: T): seq[TileMapProperty] =
-    result = @[]
-    for item in tm.itemsForPropertyName(key):
-        case item.property.kind:
-            of lptString:
-                when T is string:
-                    if item.property.strVal == value:
-                        result.add(item)
-            of lptInt:
-                when T is int:
-                    if item.property.intVal == value:
-                        result.add(item)
-            of lptFloat:
-                when T is float:
-                    if item.property.floatVal == value:
-                        result.add(item)
-            of lptBool:
-                when T is bool:
-                    if item.property.boolVal == value:
-                        result.add(item)
-            of lptColor:
-                when T is Color:
-                    if item.property.colorVal == value:
-                        result.add(item)
-            of lptFile:
-                when T is string:
-                    if item.property.fileVal == value:
-                        result.add(item)
-
-
 proc staggeredYTileRect(tm: TileMap, pos: int, tr: var Rect)=
     var row = (pos div tm.mapSize.width.int).float
     var col = (pos mod tm.mapSize.width.int).float
@@ -926,8 +862,8 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                                 x_max = max(x_max, bb.maxPoint.x)
                                 y_min = min(y_min, bb.minPoint.y)
                                 y_max = max(y_max, bb.maxPoint.y)
-                            else:
-                                echo "TILE NOT FOUND: ", tile
+                            # else:
+                            #     echo "TILE NOT FOUND: ", tile
 
                         else:
                             x_min = min(x_min, vertexData[0])
@@ -1005,9 +941,9 @@ proc packAllTilesToSheet(tm: TileMap) =
                 r.size = sz
                 r.size.width += margin * 2
                 r.size.height += margin * 2
-#                var tc: array[4, float32]
-#                let tex = img.getTextureQuad(gl, tc)
-#                gl.bindTexture(gl.TEXTURE_2D, tex)
+                #var tc: array[4, float32]
+                #let tex = img.getTextureQuad(gl, tc)
+                #gl.bindTexture(gl.TEXTURE_2D, tex)
                 # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
                 # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 
@@ -1091,321 +1027,157 @@ proc removeLayer(tm: TileMap, idx: int, name: string) =
             tm.rebuildAllRows()
 
 proc removeLayer*(tm: TileMap, name: string)=
-    for i, l in tm.layers:
-        if l.name == name:
+    for i, lay in tm.layers:
+        if lay.name == name:
             tm.removeLayer(i, name)
             return
 
-#todo: serialize support
-# method deserialize*(c: TileMap, j: JsonNode, serealizer: Serializer) =
-#     discard
+proc itemsForPropertyName*[T](tm: TileMap, key: string): seq[tuple[obj: T, property: JsonNode]]=
+    result = @[]
+    when T is TileMapLayer | ImageMapLayer | BaseTileMapLayer:
+        for lay in tm.layers:
+            if lay of T and not lay.properties.isNil and key in lay.properties:
+                result.add((obj:lay.T, property: lay.properties[key]))
 
-# method serialize*(c: TileMap, s: Serializer): JsonNode=
-#     result = newJObject()
+    elif T is TileSheet | TileCollection:
+        for ts in tm.tileSets:
+            if ts of T and not ts.properties.isNil and key in ts.properties:
+                result.add((obj:ts.T, property: ts.properties[key]))
 
+    elif T is Tile:
+        for ts in tm.tileSets:
+            if ts is TileCollection:
+                let tc = ts.TileCollection
+                for tile in tc.collection:
+                    if not tile.properties.isNil and key in tile.properties:
+                        result.add((obj:tile.T, property: tile.properties[key]))
+
+proc itemsForPropertyValue*[T, V](tm: TileMap, key: string, value: V): seq[tuple[obj: T, property: JsonNode]]=
+    result = @[]
+    for item in itemsForPropertyName[T](tm, key):
+        when V is string:
+            if item.property.kind == JString and item.property.str == value:
+                result.add(item)
+        elif V is int:
+            if item.property.kind == JInt and item.property.num.int == value:
+                result.add(item)
+        elif V is float:
+            if item.property.kind == JFloat and item.property.getFNum() == value:
+                result.add(item)
+        elif V is bool:
+            if item.property.kind == JBool and item.property.getBVal() == value:
+                result.add(item)
 
 method visitProperties*(tm: BaseTileMapLayer, p: var PropertyVisitor) =
     if not tm.properties.isNil:
         for k, v in tm.properties:
-            case v.kind:
-            of lptString:
-                p.visitProperty(k, v.strVal)
-            of lptBool:
-                p.visitProperty(k, v.boolVal)
-            of lptColor:
-                p.visitProperty(k, v.colorVal)
-            of lptFloat:
-                p.visitProperty(k, v.floatVal)
-            of lptInt:
-                p.visitProperty(k, v.intVal)
-            else:
-                discard
+            var val = $v
+            p.visitProperty(k, val)
 
-method visitProperties*(tm: TileMap, p: var PropertyVisitor) =
-    p.visitProperty("mapSize", tm.mapSize)
-    p.visitProperty("tileSize", tm.tileSize)
-    p.visitProperty("orientation", tm.orientation)
+method componentNodeWasAddedToSceneView*(tm: TileMap)=
+    tm.layers = @[]
+    for n in tm.node.children:
+        let lc = n.componentIfAvailable(BaseTileMapLayer)
+        if not lc.isNil:
+            lc.map = tm
+            if lc of TileMapLayer:
+                lc.TileMapLayer.tileSize = tm.tileSize
+            tm.layers.add(lc)
+
+    tm.packAllTilesToSheet()
+    tm.rebuildAllRowsIfNeeded()
+
+#[
+
+    SERIALIZATION / DESERIALIZATION
+
+]#
+
+proc toProperties(rps: seq[RawProperties]): Properties=
+    result = newTable[string, JsonNode]()
+    for rp in rps:
+        result[rp.name] = parseJson(rp.value)
+
+proc toRawProperties(ps: Properties): seq[RawProperties]=
+    result = @[]
+    for name, value in ps:
+        result.add((name: name, value: $value))
+
+proc toPhantom(c: TileMap, p: var object) =
+    var rawTileSets = newSeq[TileSetRaw]()
+    for ts in c.tileSets:
+        var rts: TileSetRaw
+        rts.firstgid = ts.firstGid.int32
+        if ts of TileSheet:
+            rts.image = ts.TileSheet.sheet
+            rts.columns = ts.TileSheet.columns.int32
+        else:
+            rts.collection = @[]
+            let tc = ts.TileCollection
+            for i, t in tc.collection:
+                if not t.image.isNil:
+                    var rt: RawTile
+                    rt.image = t.image
+                    rt.id = i.int32
+                    if not t.properties.isNil:
+                        rt.rawProperties = t.properties.toRawProperties()
+                    rts.collection.add(rt)
+
+        rts.tileSize = ts.tileSize
+        rts.name = ts.name
+        rawTileSets.add(rts)
+    
+    p.tileSets = rawTileSets
+
+    if not c.properties.isNil:
+        p.rawProperties = c.properties.toRawProperties()
+
+proc fromPhantom(c: TileMap, p: object) =
+    c.tileSets = @[]
+    for rts in p.tileSets:
+        var ts: BaseTileSet
+        if not rts.image.isNil:
+            var sts = new(TileSheet)
+            sts.sheet = rts.image
+            sts.columns = rts.columns
+            ts = sts
+        else:
+            var cts = new(TileCollection)
+            cts.collection = @[]
+            for t in rts.collection:
+                if t.id >= cts.collection.len:
+                    cts.collection.setLen(t.id + 1)
+                cts.collection[t.id] = (image: t.image, properties: (if not t.rawProperties.isNil: t.rawProperties.toProperties() else: nil))
+            ts = cts
+
+        ts.name = rts.name
+        ts.firstgid = rts.firstGid
+        ts.tileSize = rts.tileSize
+        c.tileSets.add(ts)
+    
+    if not p.rawProperties.isNil:
+        c.properties = p.rawProperties.toProperties()
+
+proc toPhantom(c: TileMapLayer, p: var object) =
+    if not c.properties.isNil:
+        p.rawProperties = c.properties.toRawProperties()
+
+proc fromPhantom(c: TileMapLayer, p: object) =
+    if not p.rawProperties.isNil:
+        c.properties = p.rawProperties.toProperties()
+
+proc toPhantom(c: ImageMapLayer, p: var object) =
+    if not c.properties.isNil:
+        p.rawProperties = c.properties.toRawProperties()
+
+proc fromPhantom(c: ImageMapLayer, p: object) =
+    if not p.rawProperties.isNil:
+        c.properties = p.rawProperties.toProperties()
+
+genSerializationCodeForComponent(TileMap)
+genSerializationCodeForComponent(TileMapLayer)
+genSerializationCodeForComponent(ImageMapLayer)
 
 registerComponent(TileMap, "TileMap")
 registerComponent(ImageMapLayer, "TileMap")
 registerComponent(TileMapLayer, "TileMap")
-
-#[
-    Tiled support http://www.mapeditor.org/
- ]#
-
-var tiledLayerCreators = initTable[string, proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer]()
-
-tiledLayerCreators["imagelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer =
-    let layer = new(ImageMapLayer)
-    if "image" in jl and jl["image"].str.len > 0:
-        deserializeImage(jl["image"], s) do(img: Image, err: string):
-            layer.image = img
-
-    result = layer
-
-tiledLayerCreators["tilelayer"] = proc(tm: TileMap, jl: JsonNode, s: Serializer): BaseTileMapLayer =
-    let layer = new(TileMapLayer)
-
-    var dataSize = (tm.mapSize.width * tm.mapSize.height).int
-    if "actualSize" in jl:
-        let acts = jl["actualSize"]
-        layer.actualSize.minx = acts["minX"].getNum().int
-        layer.actualSize.maxx = acts["maxX"].getNum().int
-        layer.actualSize.miny = acts["minY"].getNum().int
-        layer.actualSize.maxy = acts["maxY"].getNum().int
-
-        dataSize = (layer.actualSize.maxx - layer.actualSize.minx) * (layer.actualSize.maxy - layer.actualSize.miny)
-
-    else:
-        layer.actualSize.minx = 0
-        layer.actualSize.maxx = tm.mapSize.width.int
-        layer.actualSize.miny = 0
-        layer.actualSize.maxy = tm.mapSize.height.int
-
-    layer.tileSize = tm.tileSize
-    layer.data = newSeq[int16](dataSize)
-
-    var i = 0
-    for jld in jl["data"]:
-        layer.data[i] = jld.getNum().int16
-        inc i
-
-    result = layer
-
-proc checkLoadingErr(err: string) {.raises: Exception.}=
-    if not err.isNil:
-        raise newException(Exception, err)
-
-
-proc getProperties[T](tm: TileMap, node: JsonNode, item: T): Properties =
-    if "propertytypes" in node and "properties" in node:
-        var len = 4
-        while node["propertytypes"].len > len:
-            len *= 2
-        result = newTable[string, Property](len)
-
-        for key, value in node["propertytypes"]:
-            if key in node["properties"]:
-                let kind = parseEnum[PropertyType](value.getStr())
-                let property = newProperty(kind, node["properties"][key])
-                result[key] = property
-
-                var mapProperty: TileMapProperty
-                when T is BaseTileMapLayer:
-                    mapProperty = TileMapProperty(kind: tmlptLayer, layer: item, property: property)
-                elif T is BaseTileSet:
-                    mapProperty = TileMapProperty(kind: tmlptTileset, tileset: item, property: property)
-                elif T is int16:
-                    mapProperty = TileMapProperty(kind: tmlptTile, tid: item, property: property)
-                if not (key in tm.properties):
-                    tm.properties[key] = TileMapPropertyCollection(collection: @[])
-                tm.properties[key].collection.add(mapProperty)
-
-
-proc loadTileSet(jTileSet: JsonNode, serializer: Serializer, tm: TileMap): BaseTileSet =
-    var firstgid = 0
-    if "firstgid" in jTileSet:
-        firstgid = jTileSet["firstgid"].getNum().int
-
-    if "tiles" in jTileSet:
-        let tileCollection = new(TileCollection)
-
-        tileCollection.tilesCount = jTileSet["tilecount"].getNum().int
-        tileCollection.collection = @[]
-        tileCollection.firstGid = firstgid
-
-        for k, v in jTileSet["tiles"]:
-            closureScope:
-                let i = parseInt(k)
-
-                deserializeImage(v["image"], serializer) do(img: Image, err: string):
-                    checkLoadingErr(err)
-
-                    if i >= tileCollection.collection.len:
-                        tileCollection.collection.setLen(i + 1)
-
-                    tileCollection.collection[i] = (img, getProperties(tm, v, int16(firstgid + i)))
-
-        result = tileCollection
-
-    elif "image" in jTileSet:
-        let tileSheet = new(TileSheet)
-        deserializeImage(jTileSet["image"], serializer) do(img: Image, err: string):
-            checkLoadingErr(err)
-            tileSheet.sheet = img
-
-        tileSheet.columns = jTileSet["columns"].getNum().int
-        result = tileSheet
-
-    else:
-        raise newException(Exception, "Incorrect tileSet format")
-
-    result.name = jTileSet["name"].getStr()
-    result.tileSize = newVector3(jTileSet["tilewidth"].getFNum(), jTileSet["tileheight"].getFNum())
-    result.tilesCount = jTileSet["tilecount"].getNum().int
-
-    result.firstGid = firstgid
-
-    result.properties = getProperties(tm, jTileSet, result)
-
-    echo "TileSet ", result.name, " loaded!"
-
-proc loadTiledWithUrl*(tm: TileMap, url: string, onComplete: proc() = nil) =
-    loadAsset(url) do(jtm: JsonNode, err: string):
-        checkLoadingErr(err)
-
-        let serializer = new(Serializer)
-        serializer.url = url
-        serializer.onComplete = proc () =
-            tm.packAllTilesToSheet()
-            tm.rebuildAllRowsIfNeeded()
-            if not onComplete.isNil: onComplete()
-
-        if "orientation" in jtm:
-            try:
-                tm.orientation = parseEnum[TileMapOrientation](jtm["orientation"].getStr())
-            except:
-                if jtm["orientation"].getStr() == "staggered":
-                    let isStaggerAxisX = jtm["staggeraxis"].getStr() == "x"
-                    if isStaggerAxisX:
-                        tm.orientation = TileMapOrientation.staggeredX
-                    else:
-                        tm.orientation = TileMapOrientation.staggeredY
-                    tm.isStaggerIndexOdd = jtm["staggerindex"].getStr() == "odd"
-
-        if "width" in jtm and "height" in jtm:
-            tm.mapSize = newSize(jtm["width"].getFNum(), jtm["height"].getFNum())
-
-        if "tileheight" in jtm and "tilewidth" in jtm:
-            let tWidth = jtm["tilewidth"].getNum().float
-            let tHeigth = jtm["tileheight"].getNum().float
-            tm.tileSize = newVector3(tWidth, tHeigth)
-
-        if "layers" in jtm:
-            tm.layers = @[]
-
-            proc parseLayer(tm: TileMap, jl: JsonNode, pos: Vector3 = newVector3(), visible = true)=
-                let layerType = jl["type"].getStr()
-                let layerCreator = tiledLayerCreators.getOrDefault(layerType)
-
-                var position = newVector3()
-                if "offsetx" in jl:
-                    position.x = jl["offsetx"].getFNum()
-                if "offsety" in jl:
-                    position.y = jl["offsety"].getFNum()
-
-                position += pos
-
-                let enabled = if visible: jl["visible"].getBVal() else: false
-
-                if layerCreator.isNil:
-                    if layerType == "group":
-                        var grps: JsonNode
-                        var grpt: JsonNode
-                        if "propertytypes" in jl and "properties" in jl:
-                            grps = jl["properties"]
-                            grpt = jl["propertytypes"]
-
-                        let inheritProperties = not grps.isNil and not grpt.isNil
-
-                        for jLayer in jl["layers"]:
-                            ## properties inheritance
-                            if inheritProperties:
-                                var chps: JsonNode
-                                var chpt: JsonNode
-                                if "propertytypes" in jLayer and "properties" in jLayer:
-                                    chpt = jLayer["propertytypes"]
-                                    chps = jLayer["properties"]
-
-                                if chps.isNil:
-                                    chps = newJObject()
-                                if chpt.isNil:
-                                    chpt = newJObject()
-
-                                for pk, pv in grps:
-                                    if pk notin chps:
-                                        chps[pk] = pv
-
-                                for pk, pv in grpt:
-                                    if pk notin chpt:
-                                        chpt[pk] = pv
-
-                                jLayer["properties"] = chps
-                                jLayer["propertytypes"] = chpt
-
-                            tm.parseLayer(jLayer, position, enabled)
-                    else:
-                        warn "TileMap loadTiled: ", layerType, " doesn't supported!"
-                    return
-
-                var layer = tm.layerCreator(jl, serializer)
-                layer.map = tm
-                let name = jl["name"].getStr()
-
-                let alpha = jl["opacity"].getFNum()
-
-                if "width" notin jl or "height" notin jl:
-                    layer.size = zeroSize
-                else:
-                    layer.size = newSize(jl["width"].getFNum(), jl["height"].getFNum())
-
-                layer.offset = newSize(position.x, position.y)
-
-                var layerNode = newNode(name)
-                layerNode.position = position
-                layerNode.alpha = alpha
-                layerNode.enabled = enabled
-
-                if layerType == "imagelayer":
-                    layerNode.setComponent("ImageMapLayer", layer)
-                elif layerType == "tilelayer":
-                    layerNode.setComponent("TileMapLayer", layer)
-
-                layer.node = layerNode
-                tm.node.addChild(layerNode)
-                tm.layers.add(layer)
-
-                layer.properties = getProperties(tm, jl, layer)
-
-            for jl in jtm["layers"]:
-                tm.parseLayer(jl)
-
-        if "tilesets" in jtm:
-            tm.tileSets = @[]
-
-            for jts in jtm["tilesets"]:
-                if "source" in jts:
-                    closureScope:
-                        let url = serializer.toAbsoluteUrl(jts["source"].getStr())
-                        serializer.startAsyncOp()
-                        let fg = jts["firstgid"]
-
-                        loadAsset(url) do(j: JsonNode, err: string):
-                            checkLoadingErr(err)
-
-                            let s = new(Serializer)
-                            s.url = url
-                            j["firstgid"] = fg
-                            s.onComplete = proc() =
-                                serializer.endAsyncOp()
-
-                            let ts = loadTileSet(j, s, tm)
-                            s.finish()
-                            tm.tileSets.add(ts)
-                else:
-                    let ts = loadTileSet(jts, serializer, tm)
-                    if not ts.isNil:
-                        tm.tileSets.add(ts)
-
-        serializer.finish()
-
-proc loadTiledWithResource*(tm: TileMap, path: string) =
-    var done = false
-    tm.loadTiledWithUrl("res://" & path) do():
-        done = true
-
-        echo "done loadTiledWithResource"
-    if not done:
-        echo "failed loadTiledWithResource"
-    #     raise newException(Exception, "Load could not complete synchronously. Possible reason: asset bundle not preloaded")
