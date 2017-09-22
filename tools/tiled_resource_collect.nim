@@ -1,9 +1,6 @@
 import json, strutils, tables
 import ospaths, os, parseopt2
 
-# import tiled_resource_convert
-# import tilemap.tile_map
-
 var destinationPath: string
 const imageLayersPath = "layers"
 const tilesetsPath = "../tiles"
@@ -11,22 +8,6 @@ const tilesetsPath = "../tiles"
 var usedGids = newCountTable[int]()
 var unusedTiles = newSeq[string]()
 var removeUnused = false
-
-type CustomPropertyOwner = enum
-    cpoLayer = "layer"
-    cpoMap = "map"
-    cpoTile = "tile"
-    cpoTileSet = "tileset"
-
-type CustomProperty = tuple
-    owner: CustomPropertyOwner
-    ownerName: string
-    key: string
-    val: string
-
-var customProps = newSeq[CustomProperty]()
-
-var unusedTileSets = newSeq[string]()
 
 proc moveImageFile(jstr: JsonNode, k: string, pathTo: string) =
     var path = jstr[k].str
@@ -38,7 +19,7 @@ proc moveImageFile(jstr: JsonNode, k: string, pathTo: string) =
     jstr[k] = %jPath
 
     createDir(splitFile(copyTo).dir)
-    # echo "COPY FILE: IMAGE: ", path, " to ", copyTo
+    echo "COPY FILE: IMAGE: ", path, " to ", copyTo
     copyFile(path, copyTo)
 
 proc moveTileFile(jstr: JsonNode, k: string, pathFrom: string = "", pathTo: string = "", integrated: bool) =
@@ -63,62 +44,25 @@ proc moveTileFile(jstr: JsonNode, k: string, pathFrom: string = "", pathTo: stri
         path = pathFrom & '/' & path
     
     createDir(splitFile(copyTo).dir)
-    # echo "COPY FILE: TILE: ", path, " to ", copyTo
+    echo "COPY FILE: TILE: ", path, " to ", copyTo
     copyFile(path, copyTo)
 
-# proc moveTilesetFile(jstr: JsonNode, k: string)=
-#     let path = jstr[k].str
-#     let spFile = splitFile(path)
-#     let jPath = tilesetsPath & '/' & spFile.name & spFile.ext
-#     let copyTo = destinationPath & '/' & jPath
-#     jstr[k] = %jPath
+proc moveTilesetFile(jstr: JsonNode, k: string)=
+    let path = jstr[k].str
+    let spFile = splitFile(path)
+    let jPath = tilesetsPath & '/' & spFile.name & spFile.ext
+    let copyTo = destinationPath & '/' & jPath
+    jstr[k] = %jPath
 
-#     createDir(splitFile(copyTo).dir)
-#     echo "COPY FILE: TILESET: ", path, " to ", copyTo
-#     copyFile(path, copyTo)
-
-proc extractProperties(jn: JsonNode, owner: CustomPropertyOwner, name: string):seq[CustomProperty]=
-    if "propertytypes" notin jn: return
-    result = @[]
-    for key, ptype in jn["propertytypes"]:
-
-        # echo "\nSTART EXTRACT ", key, " va ", ptype.str
-        var cp: CustomProperty
-        cp.owner = owner
-        cp.ownerName = name
-        # cp.ptype = parseEnum[PropertyType](ptype.str)
-        cp.key = key
-        cp.val = $jn["properties"][key]
-
-        # echo "EXTRACT PROPERTY ", cp
-        # echo ""
-        result.add(cp)
-    
-    jn.delete("propertytypes")
-    jn.delete("properties")
-
-
-proc writeProperties(jn: JsonNode, customProps: seq[CustomProperty])=
-    if customProps.isNil or customProps.len == 0: return
-
-    var propNames = newJArray()
-    var propValues = newJArray()
-
-    for cp in customProps:
-        propNames.add(%cp.key)
-        propValues.add(%cp.val)
-
-    jn["customPropertyNames"]  = propNames
-    jn["customPropertyValues"] = propValues
+    createDir(splitFile(copyTo).dir)
+    echo "COPY FILE: TILESET: ", path, " to ", copyTo
+    copyFile(path, copyTo)
 
 proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
     let spFile = splitFile(pathFrom)
     let tdest = jn["name"].str
-    let integrated = true
-    # pathFrom.isNil
-    let destPath = destinationPath & '/' & tilesetsPath & '/' & spFile.name & ".json"    
-    var isTileSetUsed = true
-
+    let integrated = pathFrom.isNil
+    
     if "image" in jn:
         try:
             jn.moveTileFile("image", spFile.dir, tdest, integrated)
@@ -127,6 +71,20 @@ proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
                 raise
 
     elif "tiles" in jn:
+        if "tilepropertytypes" in jn and "tileproperties" in jn:
+            for key, value in jn["tilepropertytypes"]:
+                var tile = jn["tiles"][key]
+                
+                if "properties" notin tile:
+                    tile["properties"] = newJObject()
+                for key, value in jn["tileproperties"][key]:
+                    tile["properties"][key] = value
+
+                if "propertytypes" notin tile:
+                    tile["propertytypes"] = newJObject()
+                for key, value in jn["tilepropertytypes"][key]:
+                    tile["propertytypes"][key] = value
+        
         if removeUnused:
             var tiles = newJObject()
             for k, v in jn["tiles"]:
@@ -143,8 +101,7 @@ proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
                     unusedTiles.add(v["image"].str)
 
             jn["tiles"] = tiles
-            if tiles.len == 0:
-                isTileSetUsed = false
+
         else:
             for k, v in jn["tiles"]:
                 let gid = k.parseInt() + firstgid
@@ -156,55 +113,26 @@ proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
                 except OSError:
                     when not defined(safeMode):
                         raise
-    
-    if isTileSetUsed:
-        if "tiles" in jn and "tilepropertytypes" in jn and "tileproperties" in jn:
-            for key, ptype in jn["tilepropertytypes"]:
 
-                var tileProps = newSeq[CustomProperty]()
-                for name, value in jn["tileproperties"][key]:
-                    var cp: CustomProperty
-                    cp.ownerName = key
-                    cp.key = name
-                    cp.val = $value
-
-                    tileProps.add(cp)
-                    
-                if tileProps.len > 0:
-                    var propOwner = newJArray()                    
-                    var propNames = newJArray()
-                    var propValues = newJArray()
-
-                    for cp in customProps:
-                        propOwner.add(%cp.ownerName)
-                        propNames.add(%cp.key)
-                        propValues.add(%cp.val)
-
-                    jn["customTilePropertyNames"]  = propNames
-                    jn["customTilePropertyValues"] = propValues
-                    jn["customTilePropertyOwner"] = propOwner
-                    echo ""
-            jn.delete("tilepropertytypes")
-            jn.delete("tileproperties")
-
-        jn.writeProperties extractProperties(jn, cpoTileSet, tdest)
-        # jn.writeProperties(props)
-
-    else:
-        unusedTileSets.add(pathFrom)
+    if not integrated:
+        writeFile(destinationPath & '/' & tilesetsPath & '/' & spFile.name & ".json", $jn)
 
 proc prepareLayers(jNode: var JsonNode, width, height: int) =
     var layers = newJArray()
     var nodeLayers = jNode["layers"]
+
+    # var isStaggered = jNode["orientation"].str == "staggered"
+    # var staggeredAxisX: bool
+    # var isStaggerIndexOdd: bool
+    # if isStaggered:
+    #     staggeredAxisX = jNode["staggeraxis"].str == "x"
+    #     isStaggerIndexOdd = jNode["staggerindex"].getStr() == "odd"
 
     for layer in nodeLayers.mitems():
         if "properties" in layer:
             if "tiledonly" in layer["properties"]:
                 if layer["properties"]["tiledonly"].getBVal():
                     continue
-            else:
-                layer.writeProperties(extractProperties(layer, cpoLayer, layer["name"].str))
-
 
         if layer["type"].str == "group" and "layers" in layer:
             prepareLayers(layer, width, height)
@@ -235,8 +163,15 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
             var maxX = 0
             var maxY = 0
 
+            # for i in 0 ..< data.len:
+            #     var x = i mod width
+            #     var y = i div height
+
             for y in 0 ..< height:
                 for x in 0 ..< width:
+                # if isStaggered:
+                #     if staggeredAxisX:
+
                     let off = y * width + x
                     if data[off] != 0:
                         usedGids.inc(data[off], 1)
@@ -273,7 +208,7 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
     jNode["layers"] = layers
 
 
-proc readTiledFile(path: string): string =
+proc readTiledFile(path: string)=
     let tmpSplit = path.splitFile()
     var jTiled = parseFile(path)
     var width = jTiled["width"].getNum().int
@@ -283,8 +218,7 @@ proc readTiledFile(path: string): string =
         prepareLayers(jTiled, width, height)
 
     if "tilesets" in jTiled:
-        var jTileSets = jTiled["tilesets"]
-        var tmpTileSets = newJArray()
+        let jTileSets = jTiled["tilesets"]
         for jts in jTileSets:
             if "source" in jts:
                 let originalPath = jts["source"].str
@@ -296,14 +230,9 @@ proc readTiledFile(path: string): string =
                         var firstgid = 0
                         if "firstgid" in jts:
                             firstgid = jts["firstgid"].num.int
-                        
+
+                        jts.moveTilesetFile("source")
                         readTileSet(jFile, firstgid, originalPath)
-                        jFile["firstgid"] = %firstgid
-                        if removeUnused:
-                            if originalPath notin unusedTileSets:
-                                tmpTileSets.add(jFile)
-                            else:
-                                echo "\nUNUSED TILESET ", originalPath
                     except OSError:
                         when not defined(safeMode):
                             raise
@@ -317,16 +246,8 @@ proc readTiledFile(path: string): string =
                 if "firstgid" in jts:
                     firstgid = jts["firstgid"].num.int
                 readTileSet(jts, firstgid)
-                tmpTileSets.add(jts)
 
-        jTiled["tilesets"] = tmpTileSets
-
-    jTiled.writeProperties(extractProperties(jTiled, cpoMap, "map"))
-    
-    result = destinationPath & "/" & tmpSplit.name & tmpSplit.ext
-    writeFile(result, $jTiled)
-
-import tiled_resource_convert
+    writeFile(destinationPath & "/" & tmpSplit.name & tmpSplit.ext, $jTiled)
 
 proc main()=
     var inFileName = ""
@@ -338,18 +259,18 @@ proc main()=
         elif key == "opt":
             removeUnused = parseBool(val)
 
+        discard
     echo "tiled_resource_collect inFileName ", inFileName, " destinationPath ", destinationPath
     if inFileName.len > 0:
         when defined(safeMode):
             echo "\n\n Running in safeMode !!\n\n"
 
-        let outFile =  readTiledFile(inFileName)
-        convertInRodAsset(outFile, outFile)
+        readTiledFile(inFileName)
 
-        # echo "\n\n usedGids "
-        # for k, v in usedGids:
-        #     echo "gid: ", k, " used: ", v
-        # # usedGids
-        # echo "\n\n unused tiles ", unusedTiles
+        echo "\n\n usedGids "
+        for k, v in usedGids:
+            echo "gid: ", k, " used: ", v
+        # usedGids
+        echo "\n\n unused tiles ", unusedTiles
 
 main()
