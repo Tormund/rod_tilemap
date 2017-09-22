@@ -32,8 +32,8 @@ proc pcgStaggeredRect*(tl: TileMapLayer, width, height: int, m, ltc, rtc, lbc, r
     
     tl.actualSize.minx = 0
     tl.actualSize.miny = 0
-    tl.actualSize.maxx = lw.int32
-    tl.actualSize.maxy = (tl.data.len div lw).int32
+    tl.actualSize.maxx = lw
+    tl.actualSize.maxy = tl.data.len div lw
 
     var ftp = height - 1
 
