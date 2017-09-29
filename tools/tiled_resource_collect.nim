@@ -159,8 +159,11 @@ proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
     
     if isTileSetUsed:
         if "tiles" in jn and "tilepropertytypes" in jn and "tileproperties" in jn:
-            for key, ptype in jn["tilepropertytypes"]:
+            var propOwner = newJArray()                    
+            var propNames = newJArray()
+            var propValues = newJArray()
 
+            for key, ptype in jn["tilepropertytypes"]:
                 var tileProps = newSeq[CustomProperty]()
                 for name, value in jn["tileproperties"][key]:
                     var cp: CustomProperty
@@ -171,21 +174,18 @@ proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
                     tileProps.add(cp)
                     
                 if tileProps.len > 0:
-                    var propOwner = newJArray()                    
-                    var propNames = newJArray()
-                    var propValues = newJArray()
-
-                    for cp in customProps:
+                    for cp in tileProps:
                         propOwner.add(%cp.ownerName)
                         propNames.add(%cp.key)
                         propValues.add(%cp.val)
-
-                    jn["customTilePropertyNames"]  = propNames
-                    jn["customTilePropertyValues"] = propValues
-                    jn["customTilePropertyOwner"] = propOwner
                     echo ""
+                    
             jn.delete("tilepropertytypes")
             jn.delete("tileproperties")
+            
+            jn["customTilePropertyNames"] = propNames
+            jn["customTilePropertyValues"] = propValues
+            jn["customTilePropertyOwner"] = propOwner
 
         jn.writeProperties extractProperties(jn, cpoTileSet, tdest)
         # jn.writeProperties(props)
