@@ -924,8 +924,9 @@ proc packAllTilesToSheet(tm: TileMap) =
         for i in allImages:
             #echo "Packing image: ", i.image.filePath
             let img = i.image
-            let sz = img.size
-            #echo "size: ", sz
+            let logicalSize = img.size
+            let sz = img.backingSize()
+
             assert(sz.width > 2)
             assert(sz.height > 2)
 
@@ -947,7 +948,10 @@ proc packAllTilesToSheet(tm: TileMap) =
                 # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
                 # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 
-                var fromRect = r
+                var fromRect: Rect
+                fromRect.size = logicalSize
+                fromRect.size.width += margin * 2
+                fromRect.size.height += margin * 2
                 fromRect.origin.x = - margin
                 fromRect.origin.y = - margin
                 c.drawImage(img, r, fromRect)
@@ -959,7 +963,7 @@ proc packAllTilesToSheet(tm: TileMap) =
                 r.size.height -= margin * 2
 
 
-                let yOff = tm.tileSize.y - sz.height
+                let yOff = tm.tileSize.y - logicalSize.height
 
                 const dv = 0 #-1.0
                 const d = 0.0 #1.0
@@ -971,16 +975,16 @@ proc packAllTilesToSheet(tm: TileMap) =
                 coords[3] = (r.y.Coord + d) / texHeight.Coord
 
                 coords[4] = dv
-                coords[5] = sz.height + yOff - dv
+                coords[5] = logicalSize.height + yOff - dv
                 coords[6] = (r.x.Coord + d) / texWidth.Coord
                 coords[7] = (r.maxY - d) / texHeight.Coord
 
-                coords[8] = sz.width - dv
-                coords[9] = sz.height + yOff - dv
+                coords[8] = logicalSize.width - dv
+                coords[9] = logicalSize.height + yOff - dv
                 coords[10] = (r.maxX - d) / texWidth.Coord
                 coords[11] = (r.maxY - d) / texHeight.Coord
 
-                coords[12] = sz.width - dv
+                coords[12] = logicalSize.width - dv
                 coords[13] = 0 + yOff + dv
                 coords[14] = (r.maxX - d) / texWidth.Coord
                 coords[15] = (r.y + d) / texHeight.Coord
