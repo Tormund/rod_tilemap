@@ -17,7 +17,7 @@ type
     LayerRange* = tuple
         minx, miny: int32
         maxx, maxy: int32
-    
+
     Properties* = TableRef[string, JsonNode]
 
     BaseTileMapLayer* = ref object of Component
@@ -79,7 +79,7 @@ type
         tileSize*: Vector3
         layers*: seq[BaseTileMapLayer]
         tileSets*: seq[BaseTileSet]
-        mOrientation*: TileMapOrientation    
+        mOrientation*: TileMapOrientation
         isStaggerIndexOdd*: bool
         properties*: Properties
 
@@ -120,7 +120,7 @@ property_desc.properties(TileMap):
 property_desc.properties(TileMapLayer):
     rawProperties(phantom = seq[RawProperties])
     data #seq[int16]
-    actualSize #tuple 
+    actualSize #tuple
     tileSize #vector3
     size #size
     offset #size
@@ -128,7 +128,7 @@ property_desc.properties(TileMapLayer):
 property_desc.properties(ImageMapLayer):
     rawProperties(phantom = seq[RawProperties])
     image #Image
-    actualSize #tuple 
+    actualSize #tuple
     size #size
     offset #size
 
@@ -932,6 +932,9 @@ proc packAllTilesToSheet(tm: TileMap) =
 
             const margin = 4 # Hack
 
+            let srcLogicalMarginX = margin * (logicalSize.width / sz.width)
+            let srcLogicalMarginY = margin * (logicalSize.height / sz.height)
+
             let p = rp.pack(sz.width.int32 + margin * 2, sz.height.int32 + margin * 2)
             if p.hasSpace:
                 #echo "pos: ", p
@@ -950,10 +953,10 @@ proc packAllTilesToSheet(tm: TileMap) =
 
                 var fromRect: Rect
                 fromRect.size = logicalSize
-                fromRect.size.width += margin * 2
-                fromRect.size.height += margin * 2
-                fromRect.origin.x = - margin
-                fromRect.origin.y = - margin
+                fromRect.size.width += srcLogicalMarginX * 2
+                fromRect.size.height += srcLogicalMarginY * 2
+                fromRect.origin.x = - srcLogicalMarginX
+                fromRect.origin.y = - srcLogicalMarginY
                 c.drawImage(img, r, fromRect)
 
                 r.origin.x += margin
@@ -994,7 +997,7 @@ proc packAllTilesToSheet(tm: TileMap) =
                 subimageCoords[0] = coords[2]
                 subimageCoords[1] = coords[3]
                 subimageCoords[2] = coords[10]
-                subimageCoords[3] = coords[7]
+                subimageCoords[3] = coords[11]
 
                 let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
                 tm.setImageForTile(i.tid, sub)
@@ -1130,7 +1133,7 @@ proc toPhantom(c: TileMap, p: var object) =
         rts.tileSize = ts.tileSize
         rts.name = ts.name
         rawTileSets.add(rts)
-    
+
     p.tileSets = rawTileSets
 
     if not c.properties.isNil:
@@ -1158,7 +1161,7 @@ proc fromPhantom(c: TileMap, p: object) =
         ts.firstgid = rts.firstGid
         ts.tileSize = rts.tileSize
         c.tileSets.add(ts)
-    
+
     if not p.rawProperties.isNil:
         c.properties = p.rawProperties.toProperties()
 
