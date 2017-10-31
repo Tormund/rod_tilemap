@@ -1053,7 +1053,7 @@ proc itemsForPropertyName*[T](tm: TileMap, key: string): seq[tuple[obj: T, prope
 
     elif T is Tile:
         for ts in tm.tileSets:
-            if ts is TileCollection:
+            if ts of TileCollection:
                 let tc = ts.TileCollection
                 for tile in tc.collection:
                     if not tile.properties.isNil and key in tile.properties:
