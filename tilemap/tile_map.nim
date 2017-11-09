@@ -4,7 +4,7 @@ import rod / tools / [ serializer, debug_draw ]
 import rod / utils / [ serialization_codegen ]
 from rod.utils.property_desc import nil
 
-import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
+import nimx / [ types, property_visitor, matrixes, portable_gl, context, image,
                 render_to_image ]
 
 import json, tables, strutils, logging, sequtils, algorithm, math
