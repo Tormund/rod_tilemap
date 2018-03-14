@@ -323,7 +323,7 @@ proc readTiledFile(path: string): string =
 
     jTiled.writeProperties(extractProperties(jTiled, cpoMap, "map"))
 
-    result = destinationPath & "/" & tmpSplit.name & tmpSplit.ext
+    result = destinationPath & "/" & tmpSplit.name & ".jcomp"
     writeFile(result, $jTiled)
 
 import tiled_resource_convert
