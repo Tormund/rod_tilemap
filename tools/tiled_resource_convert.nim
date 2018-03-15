@@ -66,23 +66,23 @@ when rawParsingBlock:
             inc i
 
         result = layer
-    
+
     proc getProperties(jn: JsonNode):Properties=
-        if "customPropertyNames" in jn and "customPropertyValues" in jn: 
+        if "customPropertyNames" in jn and "customPropertyValues" in jn:
             result = newTable[string, JsonNode]()
             var names = jn["customPropertyNames"]
-            var vals = jn["customPropertyValues"]  
+            var vals = jn["customPropertyValues"]
 
             var index = 0
             for jname in names:
                 result[jname.str] = parseJson(vals[index].str)
                 inc index
-        
+
     proc getTileProperties(jn: JsonNode, id: int):Properties=
-        if "customTilePropertyNames" in jn and "customTilePropertyValues" in jn and "customTilePropertyOwner" in jn: 
-            
+        if "customTilePropertyNames" in jn and "customTilePropertyValues" in jn and "customTilePropertyOwner" in jn:
+
             var names = jn["customTilePropertyNames"]
-            var vals = jn["customTilePropertyValues"]  
+            var vals = jn["customTilePropertyValues"]
             var owners = jn["customTilePropertyOwner"]
 
             var index = 0
@@ -94,7 +94,7 @@ when rawParsingBlock:
                     var jname = names[index].str
                     result[jname] = parseJson(vals[index].str)
                 inc index
-        
+
     proc parseTileMap(tm: TileMap, jtm: JsonNode) =
         var mapProps = getProperties(jtm)
         if not mapProps.isNil:
@@ -135,7 +135,7 @@ when rawParsingBlock:
                 position += pos
 
                 let enabled = if visible: jl["visible"].getBVal() else: false
-                
+
                 var layProps = getProperties(jl)
 
                 if layerCreator.isNil:
@@ -163,7 +163,7 @@ when rawParsingBlock:
                         for k, v in parentProperties:
                             if k notin layer.properties:
                                 layer.properties[k] = v
-                
+
 
                 let alpha = jl["opacity"].getFNum()
 
@@ -190,7 +190,7 @@ when rawParsingBlock:
 
             for jl in jtm["layers"]:
                 tm.parseLayer(jl)
-        
+
         if "tilesets" in jtm:
             var tileSets = jtm["tilesets"]
             tm.tileSets = @[]
@@ -201,7 +201,7 @@ when rawParsingBlock:
                     var img = new(SelfContainedImage)
                     img.setFilePath(jts["image"].str)
                     sts.sheet = img
-                    sts.columns = jts["columnts"].getNum().int
+                    sts.columns = jts["columns"].getNum().int
                     ts = sts
                 else:
                     var cts = new(TileCollection)
@@ -214,7 +214,7 @@ when rawParsingBlock:
                             cts.collection.setLen(id + 1)
                         cts.collection[id] = (image: img, properties: getTileProperties(jts, id))
                     ts = cts
-                
+
                 var tilesetProps = jts.getProperties()
                 if not tilesetProps.isNil:
                     ts.properties = tilesetProps
@@ -229,6 +229,6 @@ when rawParsingBlock:
                     ts.tileSize = newVector3(jts["tilewidth"].getFNum(), jts["tileheight"].getFNum())
 
                 tm.tileSets.add(ts)
-                
+
 when isMainModule:
     convertInRodAsset("map.json", "out_map.json")

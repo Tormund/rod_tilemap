@@ -795,8 +795,9 @@ proc updateWithVertexData(row: var DrawingRow, vertexData: openarray[float32]) {
     gl.bufferData(gl.ARRAY_BUFFER, vertexData, gl.STATIC_DRAW)
 
 proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
-    let tileY = index div 2
-    let odd = index mod 2 # 1 if row is odd, 0 otherwise
+    let staggered = tm.orientation in [TileMapOrientation.staggeredX, TileMapOrientation.staggeredY]
+    let tileY = if staggered: index div 2 else: index
+    let odd = if staggered: index mod 2 else: index  # 1 if row is odd, 0 otherwise
     var x_min = Inf
     var x_max = -Inf
     var y_min: float32 = Inf
@@ -816,9 +817,7 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
 
     var vertexData = newSeq[float32]()
 
-    #echo "rebuildRow: ", index, ", tileY: ", tileY
-
-    let yOffBase = Coord(index) * tm.tileSize.y / 2
+    let yOffBase = if staggered: Coord(index) * tm.tileSize.y / 2 else: Coord(index) * tm.tileSize.y
 
     template addLayerBreak() =
         let quadsInRowSoFar = vertexData.len div 16
@@ -838,29 +837,30 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                 let tml = TileMapLayer(layer)
                 let maxx = tml.actualSize.maxx
                 let layerWidth = maxx - tml.actualSize.minx
-                let layerStartOdd = tml.actualSize.minx mod 2 # 1 if row is odd, 0 otherwise
-                # var tilesInLayerRow = layerWidth div 2
-                #echo "layer: ", layer.name, ":" , tml.actualSize, ", tilesInLayerRow: ", tilesInLayerRow
+                var layerStartOdd = if staggered:
+                                        tml.actualSize.minx mod 2 # 1 if row is odd, 0 otherwise
+                                    else:
+                                        tml.actualSize.minx
 
                 let tileYInLayer = tileY - tml.actualSize.miny
 
                 let yOff = yOffBase #+ tml.offset.height
 
-                #for i in 0 ..< tilesInLayerRow:
                 var i = tml.actualSize.minx
-                if layerStartOdd != odd:
+                if staggered and layerStartOdd != odd:
                     inc i
 
                 while i < maxx:
                     let tileX = i - tml.actualSize.minx # * 2 + odd + layerStartOdd
                     let tileIdx = tileYInLayer * layerWidth + tileX
-                    #echo "tileYInLayer: ", tileYInLayer, ", tileX: ", tileX, ", idx: ", tileIdx
+
                     let tile = tml.data[tileIdx]
 
-                    let xOff = Coord(tileX + tml.actualSize.minx) * tm.tileSize.x / 2 #+ tml.offset.width
-                    #echo "xOff: ", xOff
-                    # let yOff = Coord(tileY + tml.actualSize.miny) * tm.tileSize.x / 2
-                    # if tile == 197:
+                    let xOff =  if staggered:
+                                    Coord(tileX + tml.actualSize.minx) * tm.tileSize.x / 2
+                                else:
+                                    Coord(i + tml.actualSize.minx) * tm.tileSize.x #+ tml.offset.width
+
                     if tile != 0:
                         if not tm.addTileToVertexData(tile, xOff, yOff, vertexData, y_min, y_max):
                             let n = tm.createObjectForTile(tile, xOff, yOff)
@@ -873,8 +873,6 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                                 x_max = max(x_max, bb.maxPoint.x)
                                 y_min = min(y_min, bb.minPoint.y)
                                 y_max = max(y_max, bb.maxPoint.y)
-                            # else:
-                            #     echo "TILE NOT FOUND: ", tile
 
                         else:
                             x_min = min(x_min, vertexData[0])
@@ -882,7 +880,10 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                             minOffset = min(minOffset, tml.offset.height)
                             maxOffset = max(maxOffset, tml.offset.height)
 
-                    i += 2
+                    if not staggered:
+                        inc i
+                    else:
+                        i += 2
 
     row.bbox.minPoint = newVector3(x_min, y_min + minOffset, 0.0)
     row.bbox.maxPoint = newVector3(x_max, y_max + maxOffset, 0.0)
@@ -917,8 +918,8 @@ proc packAllTilesToSheet(tm: TileMap) =
     let gl = c.gl
 
     var maxTextureSize = gl.getParami(gl.MAX_TEXTURE_SIZE)
-    let texWidth = min(4096, maxTextureSize)
-    let texHeight = min(4096, maxTextureSize)
+    let texWidth = min(2048, maxTextureSize)
+    let texHeight = min(2048, maxTextureSize)
 
     info "[TileMap::packAllTilesToSheet] maxTextureSize ", maxTextureSize
 
@@ -943,6 +944,9 @@ proc packAllTilesToSheet(tm: TileMap) =
 
             const margin = 4 # Hack
 
+            let srcLogicalMarginX = margin * (logicalSize.width / sz.width)
+            let srcLogicalMarginY = margin * (logicalSize.height / sz.height)
+
             let p = rp.pack(sz.width.int32 + margin * 2, sz.height.int32 + margin * 2)
             if p.hasSpace:
                 #echo "pos: ", p
@@ -961,10 +965,10 @@ proc packAllTilesToSheet(tm: TileMap) =
 
                 var fromRect: Rect
                 fromRect.size = logicalSize
-                fromRect.size.width += margin * 2
-                fromRect.size.height += margin * 2
-                fromRect.origin.x = - margin
-                fromRect.origin.y = - margin
+                fromRect.size.width += srcLogicalMarginX * 2
+                fromRect.size.height += srcLogicalMarginY * 2
+                fromRect.origin.x = - srcLogicalMarginX
+                fromRect.origin.y = - srcLogicalMarginY
                 c.drawImage(img, r, fromRect)
 
                 r.origin.x += margin
@@ -1005,7 +1009,7 @@ proc packAllTilesToSheet(tm: TileMap) =
                 subimageCoords[0] = coords[2]
                 subimageCoords[1] = coords[3]
                 subimageCoords[2] = coords[10]
-                subimageCoords[3] = coords[7]
+                subimageCoords[3] = coords[11]
 
                 let sub = tm.mTilesSpriteSheet.subimageWithTexCoords(sz, subimageCoords)
                 tm.setImageForTile(i.tid, sub)
@@ -1013,6 +1017,7 @@ proc packAllTilesToSheet(tm: TileMap) =
                 warn "pack ", i.image.filePath, " doesnt fit ", i.image.size
 
     endDraw(tm.mTilesSpriteSheet, gfs)
+    # tm.mTilesSpriteSheet = imageWithSize(newSize(texWidth.Coord, texHeight.Coord))
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
 
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
@@ -1061,7 +1066,7 @@ proc itemsForPropertyName*[T](tm: TileMap, key: string): seq[tuple[obj: T, prope
 
     elif T is Tile:
         for ts in tm.tileSets:
-            if ts is TileCollection:
+            if ts of TileCollection:
                 let tc = ts.TileCollection
                 for tile in tc.collection:
                     if not tile.properties.isNil and key in tile.properties:
@@ -1101,6 +1106,16 @@ method componentNodeWasAddedToSceneView*(tm: TileMap)=
 
     tm.packAllTilesToSheet()
     tm.rebuildAllRowsIfNeeded()
+
+method componentNodeWillBeRemovedFromSceneView*(tm: TileMap) =
+    let c = currentContext()
+    if tm.mQuadIndexBuffer != invalidBuffer:
+        c.gl.deleteBuffer(tm.mQuadIndexBuffer)
+        tm.mQuadIndexBuffer = invalidBuffer
+
+    for row in tm.drawingRows:
+        if row.vertexBuffer != invalidBuffer:
+            c.gl.deleteBuffer(row.vertexBuffer)
 
 #[
 
