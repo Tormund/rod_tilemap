@@ -175,9 +175,14 @@ void main() {
 
 proc rebuildAllRowsIfNeeded(tm: TileMap)
 
+proc layerChanged*(tm: TileMap)=
+    tm.enabledLayers.setLen(0)
+    tm.rebuildAllRowsIfNeeded()
+
 method init*(tm: TileMap) =
     procCall tm.Component.init()
     tm.drawingRows = @[]
+    tm.layers = @[]
 
 proc position*(lay: BaseTileMapLayer): Vector3=
     return lay.node.position

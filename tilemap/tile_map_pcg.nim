@@ -1,4 +1,17 @@
+import rod.node
+import rod.component
 import tile_map
+import json
+
+proc prototype*[T](m: TileMap, n: Node): T =
+    result = n.component(T)
+    result.tileSize = m.tileSize
+    result.mapSize = m.mapSize
+    result.mOrientation = m.mOrientation
+    result.tileSets = m.tileSets
+    result.isStaggerIndexOdd = m.isStaggerIndexOdd
+    result.properties = m.properties
+    result.layers = @[]
 
 proc pcgStaggeredRect*(tl: TileMapLayer, width, height: int, m, ltc, rtc, lbc, rbc, ts, bs, ls, rs: int16 = -1)=
     let lwidth = height + width
@@ -15,8 +28,8 @@ proc pcgStaggeredRect*(tl: TileMapLayer, width, height: int, m, ltc, rtc, lbc, r
     var lefs = ls
     var rigs = rs
 
-    template verifyTid(t: var int16, deft:int16)= 
-        if t == -1: 
+    template verifyTid(t: var int16, deft:int16)=
+        if t == -1:
             t = deft
 
     verifyTid(lTopc, mid)
@@ -29,7 +42,7 @@ proc pcgStaggeredRect*(tl: TileMapLayer, width, height: int, m, ltc, rtc, lbc, r
     verifyTid(rigs, mid)
 
     tl.data = newSeq[int16](dataLen)
-    
+
     tl.actualSize.minx = 0
     tl.actualSize.miny = 0
     tl.actualSize.maxx = lw.int32
