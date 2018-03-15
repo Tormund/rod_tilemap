@@ -4,14 +4,15 @@ import rod / tools / [ serializer, debug_draw ]
 import rod / utils / [ serialization_codegen ]
 from rod.utils.property_desc import nil
 
-import nimx / [ types, property_visitor, matrixes, portable_gl, context, image,
-                render_to_image ]
+import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
+                render_to_image, composition ]
 
 import json, tables, strutils, logging, sequtils, algorithm, math
 import nimx.assets.asset_loading
 import boolseq
 import rect_packer
 import opengl
+import times
 
 type
     LayerRange* = tuple
@@ -73,6 +74,8 @@ type
         rect: Rect
         text: string
         nodeCount: int
+        renderTime: float
+        postEffectCalls: int
 
     TileMap* = ref object of Component
         mapSize*: Size
@@ -501,10 +504,10 @@ proc getBBox(ml: NodeMapLayer): BBox =
 
 proc getNodeCount(ml: NodeMapLayer): int =
     proc recursiveChildrenCount(n: Node, count: var int) =
-        if not n.children.isNil:
-            count += n.children.len()
+        count += 1
 
-            for c in n.children:
+        for c in n.children:
+            if c.alpha > 0.01 and c.enabled:
                 c.recursiveChildrenCount(count)
 
     result = 1
@@ -603,6 +606,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
             elif layer of NodeMapLayer:
                 vboStateValid = false
+                var rTime = cpuTime()
                 let impl = NodeMapLayer(layer)
 
                 let bb = impl.getBBox()
@@ -611,21 +615,25 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
                 if not tm.debugObjects.isNil:
                     var dd: DebugRenderData
+                    dd.renderTime = cpuTime() - rTime
                     dd.rect = newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y)
-                    dd.text = impl.node.name & " n= " & $impl.getNodeCount()
+                    dd.text = impl.node.name
                     dd.nodeCount = impl.getNodeCount()
                     tm.debugObjects.add(dd)
 
 
     if not tm.debugObjects.isNil:
         for i, dd in tm.debugObjects:
-            var p = dd.nodeCount.float / tm.debugMaxNodes.float
+            var p = dd.renderTime * 1000.0 / tm.debugMaxNodes.float
             if p > 1.0: p = 1.0
             let color = greenTored(p)
 
+            if p == 0.0: p = 0.2
             glLineWidth(5.0 * p)
             DDdrawRect(dd.rect, color)
             DDdrawText(dd.text, dd.rect.origin, 38, color)
+            DDdrawText(" n = " & $dd.nodeCount, dd.rect.origin + newPoint(0, 40), 38, color)
+            DDdrawText(" t = " & $(dd.renderTime * 1000.0), dd.rect.origin + newPoint(0, 80), 38, color)
 
         tm.debugObjects.setLen(0)
         glLineWidth(1.0)
@@ -907,8 +915,8 @@ proc packAllTilesToSheet(tm: TileMap) =
     let gl = c.gl
 
     var maxTextureSize = gl.getParami(gl.MAX_TEXTURE_SIZE)
-    let texWidth = min(4096, maxTextureSize)
-    let texHeight = min(4096, maxTextureSize)
+    let texWidth = min(2048, maxTextureSize)
+    let texHeight = min(2048, maxTextureSize)
 
     info "[TileMap::packAllTilesToSheet] maxTextureSize ", maxTextureSize
 
@@ -1094,6 +1102,16 @@ method componentNodeWasAddedToSceneView*(tm: TileMap)=
 
     tm.packAllTilesToSheet()
     tm.rebuildAllRowsIfNeeded()
+
+method componentNodeWillBeRemovedFromSceneView*(tm: TileMap) =
+    let c = currentContext()
+    if tm.mQuadIndexBuffer != invalidBuffer:
+        c.gl.deleteBuffer(tm.mQuadIndexBuffer)
+        tm.mQuadIndexBuffer = invalidBuffer
+
+    for row in tm.drawingRows:
+        if row.vertexBuffer != invalidBuffer:
+            c.gl.deleteBuffer(row.vertexBuffer)
 
 #[
 
