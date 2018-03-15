@@ -607,7 +607,6 @@ method beforeDraw*(tm: TileMap, index: int): bool =
             elif layer of NodeMapLayer:
                 vboStateValid = false
                 var rTime = cpuTime()
-                # gPushPostEffectCalls = 0
                 let impl = NodeMapLayer(layer)
 
                 let bb = impl.getBBox()
@@ -617,7 +616,6 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                 if not tm.debugObjects.isNil:
                     var dd: DebugRenderData
                     dd.renderTime = cpuTime() - rTime
-                    # dd.postEffectCalls = gPushPostEffectCalls
                     dd.rect = newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y)
                     dd.text = impl.node.name
                     dd.nodeCount = impl.getNodeCount()
@@ -636,7 +634,6 @@ method beforeDraw*(tm: TileMap, index: int): bool =
             DDdrawText(dd.text, dd.rect.origin, 38, color)
             DDdrawText(" n = " & $dd.nodeCount, dd.rect.origin + newPoint(0, 40), 38, color)
             DDdrawText(" t = " & $(dd.renderTime * 1000.0), dd.rect.origin + newPoint(0, 80), 38, color)
-            # DDdrawText(" pe = " & $dd.postEffectCalls, dd.rect.origin + newPoint(0, 120), 38, color)
 
         tm.debugObjects.setLen(0)
         glLineWidth(1.0)
@@ -1017,7 +1014,6 @@ proc packAllTilesToSheet(tm: TileMap) =
                 warn "pack ", i.image.filePath, " doesnt fit ", i.image.size
 
     endDraw(tm.mTilesSpriteSheet, gfs)
-    # tm.mTilesSpriteSheet = imageWithSize(newSize(texWidth.Coord, texHeight.Coord))
     tm.mTilesSpriteSheet.generateMipmap(c.gl)
 
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
