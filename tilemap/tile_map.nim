@@ -5,19 +5,20 @@ import rod / utils / [ serialization_codegen ]
 from rod.utils.property_desc import nil
 
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
-                render_to_image ]
+                render_to_image, composition ]
 
 import json, tables, strutils, logging, sequtils, algorithm, math
 import nimx.assets.asset_loading
 import boolseq
 import rect_packer
 import opengl
+import times
 
 type
     LayerRange* = tuple
         minx, miny: int32
         maxx, maxy: int32
-    
+
     Properties* = TableRef[string, JsonNode]
 
     BaseTileMapLayer* = ref object of Component
@@ -73,13 +74,15 @@ type
         rect: Rect
         text: string
         nodeCount: int
+        renderTime: float
+        postEffectCalls: int
 
     TileMap* = ref object of Component
         mapSize*: Size
         tileSize*: Vector3
         layers*: seq[BaseTileMapLayer]
         tileSets*: seq[BaseTileSet]
-        mOrientation*: TileMapOrientation    
+        mOrientation*: TileMapOrientation
         isStaggerIndexOdd*: bool
         properties*: Properties
 
@@ -120,7 +123,7 @@ property_desc.properties(TileMap):
 property_desc.properties(TileMapLayer):
     rawProperties(phantom = seq[RawProperties])
     data #seq[int16]
-    actualSize #tuple 
+    actualSize #tuple
     tileSize #vector3
     size #size
     offset #size
@@ -128,7 +131,7 @@ property_desc.properties(TileMapLayer):
 property_desc.properties(ImageMapLayer):
     rawProperties(phantom = seq[RawProperties])
     image #Image
-    actualSize #tuple 
+    actualSize #tuple
     size #size
     offset #size
 
@@ -501,10 +504,10 @@ proc getBBox(ml: NodeMapLayer): BBox =
 
 proc getNodeCount(ml: NodeMapLayer): int =
     proc recursiveChildrenCount(n: Node, count: var int) =
-        if not n.children.isNil:
-            count += n.children.len()
+        count += 1
 
-            for c in n.children:
+        for c in n.children:
+            if c.alpha > 0.01 and c.enabled:
                 c.recursiveChildrenCount(count)
 
     result = 1
@@ -603,6 +606,8 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
             elif layer of NodeMapLayer:
                 vboStateValid = false
+                var rTime = cpuTime()
+                # gPushPostEffectCalls = 0
                 let impl = NodeMapLayer(layer)
 
                 let bb = impl.getBBox()
@@ -611,21 +616,27 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
                 if not tm.debugObjects.isNil:
                     var dd: DebugRenderData
+                    dd.renderTime = cpuTime() - rTime
+                    # dd.postEffectCalls = gPushPostEffectCalls
                     dd.rect = newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y)
-                    dd.text = impl.node.name & " n= " & $impl.getNodeCount()
+                    dd.text = impl.node.name
                     dd.nodeCount = impl.getNodeCount()
                     tm.debugObjects.add(dd)
 
 
     if not tm.debugObjects.isNil:
         for i, dd in tm.debugObjects:
-            var p = dd.nodeCount.float / tm.debugMaxNodes.float
+            var p = dd.renderTime * 1000.0 / tm.debugMaxNodes.float
             if p > 1.0: p = 1.0
             let color = greenTored(p)
 
+            if p == 0.0: p = 0.2
             glLineWidth(5.0 * p)
             DDdrawRect(dd.rect, color)
             DDdrawText(dd.text, dd.rect.origin, 38, color)
+            DDdrawText(" n = " & $dd.nodeCount, dd.rect.origin + newPoint(0, 40), 38, color)
+            DDdrawText(" t = " & $(dd.renderTime * 1000.0), dd.rect.origin + newPoint(0, 80), 38, color)
+            # DDdrawText(" pe = " & $dd.postEffectCalls, dd.rect.origin + newPoint(0, 120), 38, color)
 
         tm.debugObjects.setLen(0)
         glLineWidth(1.0)
@@ -1130,7 +1141,7 @@ proc toPhantom(c: TileMap, p: var object) =
         rts.tileSize = ts.tileSize
         rts.name = ts.name
         rawTileSets.add(rts)
-    
+
     p.tileSets = rawTileSets
 
     if not c.properties.isNil:
@@ -1158,7 +1169,7 @@ proc fromPhantom(c: TileMap, p: object) =
         ts.firstgid = rts.firstGid
         ts.tileSize = rts.tileSize
         c.tileSets.add(ts)
-    
+
     if not p.rawProperties.isNil:
         c.properties = p.rawProperties.toProperties()
 
