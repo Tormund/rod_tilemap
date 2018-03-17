@@ -4,6 +4,7 @@ import tile_map
 import json
 
 proc prototype*[T](m: TileMap, n: Node): T =
+    assert(n.parent.isNil, "Add node to scene after prototyping")
     result = n.component(T)
     result.tileSize = m.tileSize
     result.mapSize = m.mapSize
@@ -11,6 +12,8 @@ proc prototype*[T](m: TileMap, n: Node): T =
     result.tileSets = m.tileSets
     result.isStaggerIndexOdd = m.isStaggerIndexOdd
     result.properties = m.properties
+    # result.mTilesSpriteSheet = m.mTilesSpriteSheet
+    # result.tileVCoords = m.tileVCoords
     result.layers = @[]
 
 proc pcgStaggeredRect*(tl: TileMapLayer, width, height: int, m, ltc, rtc, lbc, rbc, ts, bs, ls, rs: int16 = -1)=

@@ -50,7 +50,7 @@ type
         sheet*: Image
         columns*: int
 
-    Tile* = tuple[image: Image, properties: Properties]
+    Tile* = tuple[image: Image, properties: Properties, gid: int]
 
     TileCollection* = ref object of BaseTileSet
         collection*: seq[Tile]
@@ -86,7 +86,7 @@ type
         isStaggerIndexOdd*: bool
         properties*: Properties
 
-        tileDrawRect: proc(tm: TileMap, pos: int, tr: var Rect)
+        # tileDrawRect: proc(tm: TileMap, pos: int, tr: var Rect)
         mQuadIndexBuffer: BufferRef
         maxQuadsInRun: int
         quadBufferLen: int
@@ -176,7 +176,7 @@ void main() {
 proc rebuildAllRowsIfNeeded(tm: TileMap)
 
 proc layerChanged*(tm: TileMap)=
-    tm.enabledLayers.setLen(0)
+    tm.enabledLayers = newBoolSeq()
     tm.rebuildAllRowsIfNeeded()
 
 method init*(tm: TileMap) =
@@ -198,49 +198,6 @@ proc `enabled=`*(lay: BaseTileMapLayer, v: bool) =
 
 proc name*(lay: BaseTileMapLayer): string =
     return lay.node.name
-
-proc layerSize(lay: TileMapLayer): Size=
-    return newSize((lay.actualSize.maxx - lay.actualSize.minx).float, (lay.actualSize.maxy - lay.actualSize.miny).float)
-
-proc layerRect(tm: TileMap, lay: TileMapLayer): Rect =
-    let layerSize = lay.layerSize
-    case tm.mOrientation:
-    of TileMapOrientation.orthogonal:
-        result = newRect(lay.position.x, lay.position.y, layerSize.width * lay.tileSize.x, layerSize.height * lay.tileSize.y)
-
-    of TileMapOrientation.isometric:
-        let
-            width = (layerSize.width + layerSize.height) * lay.tileSize.x * 0.5
-            height = (layerSize.width + layerSize.height) * lay.tileSize.y * 0.5
-        result = newRect(lay.position.x, lay.position.y, width, height)
-
-    of TileMapOrientation.staggeredX:
-        result.origin = newPoint(lay.position.x, lay.position.y)
-        result.size = newSize(lay.tileSize.x * (layerSize.width / 2.0 + 0.5), lay.tileSize.y * (layerSize.height + 0.5))
-
-    of TileMapOrientation.staggeredY:
-        result.origin = newPoint(lay.position.x, lay.position.y)
-        result.size = newSize(lay.tileSize.x * (layerSize.width + 0.5), lay.tileSize.y * (layerSize.height / 2.0 + 0.5))
-
-    else:
-        discard
-
-proc getViewportRect(lay: TileMapLayer): Rect=
-    if not lay.node.sceneView.isNil:
-        let camera = lay.node.sceneView.camera
-        result.size = camera.viewportSize * camera.node.scale.x
-        result.origin = newPoint(camera.node.worldPos().x, camera.node.worldPos().y)
-        result.origin.x = result.origin.x - camera.viewportSize.width  * 0.5 * camera.node.scale.x
-        result.origin.y = result.origin.y - camera.viewportSize.height * 0.5 * camera.node.scale.y
-
-proc getDrawRange(layer: TileMapLayer, r: Rect, ts: Vector3): LayerRange =
-    let layerLen = layer.data.len
-    result.miny = (r.x / ts.x).int32
-    result.maxy = ((r.x + r.width) / (ts.x * 0.5)).int32
-
-    result.minx = (r.y / ts.y).int32
-    result.maxx = ((r.y + r.height) / ts.y).int32
-
 
 proc layerIndex*(tm: TileMap, sla: BaseTileMapLayer): int =
     result = -1
@@ -559,6 +516,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
     var iTileLayer = 0
     let vpm = tm.node.sceneView.viewProjMatrix
     let frustum = tm.node.sceneView.camera.getFrustum()
+    let isOrtho = tm.mOrientation == TileMapOrientation.orthogonal
 
     for layer in tm.layers:
         if layer.node.enabled:
@@ -570,7 +528,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
                     for i in 0 ..< tm.drawingRows.len:
                         assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
-                        #echo "Drawing row: ", i, ", quads: ", tm.drawingRows[i].numberOfQuads
+                        # echo "Drawing row: ", i #, ", quads: ", tm.drawingRows[i].numberOfQuads
 
                         let quadStartIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer]
                         let quadEndIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer + 1]
@@ -681,68 +639,11 @@ proc setImageForTile*(tm: TileMap, tid: int16, i: Image) =
     for ts in tm.tileSets:
         ts.setImageForTile(tid, i)
 
-proc staggeredYTileRect(tm: TileMap, pos: int, tr: var Rect)=
-    var row = (pos div tm.mapSize.width.int).float
-    var col = (pos mod tm.mapSize.width.int).float
-
-    let offIndex = if tm.isStaggerIndexOdd: 0 else: 1
-    let axisP = (row.int + offIndex) mod 2
-
-    tr.origin.x = col * tm.tileSize.x + axisP.float * tm.tileSize.x * 0.5
-    tr.origin.y = row * tm.tileSize.y * 0.5
-
-    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
-
-proc staggeredXTileRect(tm: TileMap, pos: int, tr: var Rect)=
-    var row = (pos div tm.mapSize.width.int).float
-    var col = (pos mod tm.mapSize.width.int).float
-
-    let offIndex = if tm.isStaggerIndexOdd: 0 else: 1
-    let axisP = (col.int + offIndex) mod 2
-
-    tr.origin.x = col * tm.tileSize.x * 0.5
-    tr.origin.y = row * tm.tileSize.y + axisP.float * 0.5 * tm.tileSize.y
-
-    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
-
-proc isometricTileRect(tm: TileMap, pos: int, tr: var Rect)=
-    var row = (pos div tm.mapSize.width.int).float
-    var col = (pos mod tm.mapSize.width.int).float
-
-    let halfTileWidth  = tm.tileSize.x * 0.5
-    let halfTileHeigth = tm.tileSize.y * 0.5
-
-    tr.origin.x = (col * halfTileWidth) - (row * tm.tileSize.x * 0.5) + (tm.mapSize.width - 1.0) * halfTileWidth
-    tr.origin.y = (row * halfTileHeigth) + (col * halfTileHeigth)
-
-    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
-
-proc orthogonalTileRect(tm: TileMap, pos: int, tr: var Rect)=
-    var row = (pos div tm.mapSize.width.int).float
-    var col = (pos mod tm.mapSize.width.int).float
-
-    tr.origin.x = col * tm.tileSize.x
-    tr.origin.y = row * tm.tileSize.y
-
-    tr.size = newSize(tm.tileSize.x, tm.tileSize.y)
-
 proc orientation*(tm: TileMap): TileMapOrientation=
     result = tm.mOrientation
 
 proc `orientation=`*(tm: TileMap, val: TileMapOrientation)=
     tm.mOrientation = val
-
-    case val:
-    of TileMapOrientation.orthogonal:
-        tm.tileDrawRect = orthogonalTileRect
-    of TileMapOrientation.isometric:
-        tm.tileDrawRect = isometricTileRect
-    of TileMapOrientation.staggeredX:
-        tm.tileDrawRect = staggeredXTileRect
-    of TileMapOrientation.staggeredY:
-        tm.tileDrawRect = staggeredYTileRect
-    else:
-        tm.tileDrawRect = orthogonalTileRect
 
 proc containsRow(layer: BaseTileMapLayer, row: int): bool {.inline.} =
     row >= layer.actualSize.miny and row < layer.actualSize.maxy
@@ -1024,7 +925,8 @@ proc packAllTilesToSheet(tm: TileMap) =
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
 
 proc rebuildAllRows(tm: TileMap) =
-    let numRows = tm.mapSize.height.int * 2
+    let numRows = tm.mapSize.height.int * (if tm.mOrientation == TileMapOrientation.orthogonal: 1 else: 2)
+    # echo " num rows, ", numRows, " height ", tm.mapSize.height
     for i in 0 ..< numRows:
         tm.rebuildRow(i)
 
@@ -1134,7 +1036,7 @@ proc toRawProperties(ps: Properties): seq[RawProperties]=
     for name, value in ps:
         result.add((name: name, value: $value))
 
-proc toPhantom(c: TileMap, p: var object) =
+proc toPhantom(c: TileMap, p: var object) {.used.} =
     var rawTileSets = newSeq[TileSetRaw]()
     for ts in c.tileSets:
         var rts: TileSetRaw
@@ -1178,7 +1080,7 @@ proc fromPhantom(c: TileMap, p: object) =
             for t in rts.collection:
                 if t.id >= cts.collection.len:
                     cts.collection.setLen(t.id + 1)
-                cts.collection[t.id] = (image: t.image, properties: (if not t.rawProperties.isNil: t.rawProperties.toProperties() else: nil))
+                cts.collection[t.id] = (image: t.image, properties: (if not t.rawProperties.isNil: t.rawProperties.toProperties() else: nil), gid: t.id.int + rts.firstGid.int)
             ts = cts
 
         ts.name = rts.name
@@ -1189,7 +1091,7 @@ proc fromPhantom(c: TileMap, p: object) =
     if not p.rawProperties.isNil:
         c.properties = p.rawProperties.toProperties()
 
-proc toPhantom(c: TileMapLayer, p: var object) =
+proc toPhantom(c: TileMapLayer, p: var object) {.used.} =
     if not c.properties.isNil:
         p.rawProperties = c.properties.toRawProperties()
 
@@ -1197,7 +1099,7 @@ proc fromPhantom(c: TileMapLayer, p: object) =
     if not p.rawProperties.isNil:
         c.properties = p.rawProperties.toProperties()
 
-proc toPhantom(c: ImageMapLayer, p: var object) =
+proc toPhantom(c: ImageMapLayer, p: var object) {.used.} =
     if not c.properties.isNil:
         p.rawProperties = c.properties.toRawProperties()
 

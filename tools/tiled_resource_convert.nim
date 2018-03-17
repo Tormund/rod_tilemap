@@ -212,7 +212,7 @@ when rawParsingBlock:
                         img.setFilePath(v["image"].str)
                         if id >= cts.collection.len:
                             cts.collection.setLen(id + 1)
-                        cts.collection[id] = (image: img, properties: getTileProperties(jts, id))
+                        cts.collection[id] = (image: img, properties: getTileProperties(jts, id), gid: id) #actualy we don't need valid global id here
                     ts = cts
 
                 var tilesetProps = jts.getProperties()
