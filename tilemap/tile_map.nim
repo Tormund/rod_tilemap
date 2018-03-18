@@ -542,7 +542,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
                             const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
 
-                            if frustum.intersectFrustum(row.bbox):
+                            if isOrtho or frustum.intersectFrustum(row.bbox):
                                 gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
                                 gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
 
