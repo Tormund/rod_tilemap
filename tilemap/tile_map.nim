@@ -30,7 +30,7 @@ type
 
     TileMapLayer* = ref object of BaseTileMapLayer
         data*: seq[int16]
-        tileSize: Vector3
+        tileSize*: Vector3
 
     ImageMapLayer* = ref object of BaseTileMapLayer
         image*: Image
