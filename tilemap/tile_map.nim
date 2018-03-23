@@ -573,7 +573,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                 let impl = NodeMapLayer(layer)
 
                 let bb = impl.getBBox()
-                if frustum.intersectFrustum(bb):
+                if isOrtho or frustum.intersectFrustum(bb):
                     impl.node.recursiveDraw()
 
                 if not tm.debugObjects.isNil:
