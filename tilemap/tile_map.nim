@@ -494,10 +494,7 @@ proc greenTored(p: float32): Color =
 
 proc setDebugMaxNodes*(tm: TileMap, count: int) =
     tm.debugMaxNodes = count
-    if count > 0:
-        tm.debugObjects = newSeq[DebugRenderData]()
-    else:
-        tm.debugObjects = nil
+    tm.debugObjects.setLen(0)
 
 proc intersectFrustum*(f: Frustum, bbox: BBox): bool =
     if f.min.x < bbox.maxPoint.x and bbox.minPoint.x < f.max.x and f.min.y < bbox.maxPoint.y and bbox.minPoint.y < f.max.y:
@@ -576,7 +573,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                 if isOrtho or frustum.intersectFrustum(bb):
                     impl.node.recursiveDraw()
 
-                if not tm.debugObjects.isNil:
+                if tm.debugMaxNodes != 0:
                     var dd: DebugRenderData
                     dd.renderTime = cpuTime() - rTime
                     dd.rect = newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y)
@@ -585,7 +582,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                     tm.debugObjects.add(dd)
 
 
-    if not tm.debugObjects.isNil:
+    if tm.debugMaxNodes != 0:
         for i, dd in tm.debugObjects:
             var p = dd.renderTime * 1000.0 / tm.debugMaxNodes.float
             if p > 1.0: p = 1.0
@@ -708,15 +705,8 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
     var minOffset = Inf
     var maxOffset = -Inf
 
-    if row.vboLayerBreaks.isNil:
-        row.vboLayerBreaks = @[]
-    else:
-        row.vboLayerBreaks.setLen(0)
-
-    if row.objectLayerBreaks.isNil:
-        row.objectLayerBreaks = @[]
-    else:
-        row.objectLayerBreaks.setLen(0)
+    row.vboLayerBreaks.setLen(0)
+    row.objectLayerBreaks.setLen(0)
 
     var vertexData = newSeq[float32]()
 
@@ -769,7 +759,6 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                             let n = tm.createObjectForTile(tile, xOff, yOff)
                             if not n.isNil:
                                 layer.node.addChild(n)
-                                if row.objects.isNil: row.objects = @[]
                                 row.objects.add(n)
                                 let bb = n.nodeBounds()
                                 x_min = min(x_min, bb.minPoint.x)
@@ -1080,7 +1069,7 @@ proc fromPhantom(c: TileMap, p: object) =
             for t in rts.collection:
                 if t.id >= cts.collection.len:
                     cts.collection.setLen(t.id + 1)
-                cts.collection[t.id] = (image: t.image, properties: (if not t.rawProperties.isNil: t.rawProperties.toProperties() else: nil), gid: t.id.int + rts.firstGid.int)
+                cts.collection[t.id] = (image: t.image, properties: (if t.rawProperties.len != 0: t.rawProperties.toProperties() else: nil), gid: t.id.int + rts.firstGid.int)
             ts = cts
 
         ts.name = rts.name
@@ -1088,7 +1077,7 @@ proc fromPhantom(c: TileMap, p: object) =
         ts.tileSize = rts.tileSize
         c.tileSets.add(ts)
 
-    if not p.rawProperties.isNil:
+    if p.rawProperties.len != 0:
         c.properties = p.rawProperties.toProperties()
 
 proc toPhantom(c: TileMapLayer, p: var object) {.used.} =
@@ -1096,7 +1085,7 @@ proc toPhantom(c: TileMapLayer, p: var object) {.used.} =
         p.rawProperties = c.properties.toRawProperties()
 
 proc fromPhantom(c: TileMapLayer, p: object) =
-    if not p.rawProperties.isNil:
+    if p.rawProperties.len != 0:
         c.properties = p.rawProperties.toProperties()
 
 proc toPhantom(c: ImageMapLayer, p: var object) {.used.} =
@@ -1104,7 +1093,7 @@ proc toPhantom(c: ImageMapLayer, p: var object) {.used.} =
         p.rawProperties = c.properties.toRawProperties()
 
 proc fromPhantom(c: ImageMapLayer, p: object) =
-    if not p.rawProperties.isNil:
+    if p.rawProperties.len != 0:
         c.properties = p.rawProperties.toProperties()
 
 genSerializationCodeForComponent(TileMap)
