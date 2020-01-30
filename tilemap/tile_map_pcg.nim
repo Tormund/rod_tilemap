@@ -1,5 +1,5 @@
-import rod.node
-import rod.component
+import rod/node
+import rod/component
 import tile_map
 import json
 

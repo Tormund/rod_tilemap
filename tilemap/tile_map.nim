@@ -2,10 +2,9 @@ import rod / [ component, node, viewport, rod_types ]
 import rod / component / [ sprite, camera ]
 import rod / tools / [ serializer, debug_draw ]
 import rod / utils / [ serialization_codegen ]
-from rod.utils.property_desc import nil
+from rod/utils/property_desc import nil
 
-import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, resource,
-                render_to_image, composition ]
+import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, render_to_image, composition ]
 
 import json, tables, strutils, logging, sequtils, algorithm, math
 import nimx.assets.asset_loading
