@@ -8,5 +8,4 @@ license       = "MIT"
 # Dependencies
 
 requires "nim >= 0.16.1"
-requires "https://github.com/OnsetGame/rod"
 requires "https://github.com/Tormund/boolseq"

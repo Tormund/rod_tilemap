@@ -99,7 +99,7 @@ proc extractProperties(jn: JsonNode, owner: CustomPropertyOwner, name: string):s
 
 
 proc writeProperties(jn: JsonNode, customProps: seq[CustomProperty])=
-    if customProps.isNil or customProps.len == 0: return
+    if customProps.len == 0: return
 
     var propNames = newJArray()
     var propValues = newJArray()
@@ -111,12 +111,12 @@ proc writeProperties(jn: JsonNode, customProps: seq[CustomProperty])=
     jn["customPropertyNames"]  = propNames
     jn["customPropertyValues"] = propValues
 
-proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = nil)=
+proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = "")=
     let spFile = splitFile(pathFrom)
     let tdest = jn["name"].str
     let integrated = true
-    # pathFrom.isNil
-    let destPath = destinationPath & '/' & tilesetsPath & '/' & spFile.name & ".json"
+
+    # let destPath = destinationPath & '/' & tilesetsPath & '/' & spFile.name & ".json"
     var isTileSetUsed = true
 
     if "image" in jn:

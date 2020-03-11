@@ -84,7 +84,6 @@ type
         mOrientation*: TileMapOrientation
         isStaggerIndexOdd*: bool
         properties*: Properties
-
         # tileDrawRect: proc(tm: TileMap, pos: int, tr: var Rect)
         mQuadIndexBuffer: BufferRef
         maxQuadsInRun: int
@@ -96,6 +95,7 @@ type
         drawingRows: seq[DrawingRow]
         debugObjects: seq[DebugRenderData]
         debugMaxNodes: int
+        mRowRebuildingDelayedToDraw: bool
 
     TidAndImage = tuple[image: Image, tid: int16]
 
@@ -177,6 +177,9 @@ proc rebuildAllRowsIfNeeded(tm: TileMap)
 proc layerChanged*(tm: TileMap)=
     tm.enabledLayers = newBoolSeq()
     tm.rebuildAllRowsIfNeeded()
+
+proc skipRowRebuildingToNextDraw*(tm: TileMap) =
+    tm.mRowRebuildingDelayedToDraw = true
 
 method init*(tm: TileMap) =
     procCall tm.Component.init()
@@ -479,6 +482,8 @@ proc getBBox(dr: DrawingRow): BBox =
         result.minPoint = minVector(result.minPoint, n.nodeBounds().minPoint)
         result.maxPoint = maxVector(result.maxPoint, n.nodeBounds().maxPoint)
 
+    result.minPoint = minVector(dr.bbox.minPoint, result.minPoint)
+    result.maxPoint = maxVector(dr.bbox.maxPoint, result.maxPoint)
 #================   BBox     ======================
 
 proc greenTored(p: float32): Color =
@@ -495,14 +500,18 @@ proc setDebugMaxNodes*(tm: TileMap, count: int) =
     tm.debugMaxNodes = count
     tm.debugObjects.setLen(0)
 
-proc intersectFrustum*(f: Frustum, bbox: BBox): bool =
-    if f.min.x < bbox.maxPoint.x and bbox.minPoint.x < f.max.x and f.min.y < bbox.maxPoint.y and bbox.minPoint.y < f.max.y:
-        return true
+template intersectFrustum*(f: Frustum, bbox: BBox): bool =
+    f.min.x < bbox.maxPoint.x and bbox.minPoint.x < f.max.x and f.min.y < bbox.maxPoint.y and bbox.minPoint.y < f.max.y
+
+template intersectFrustum(f: Frustum, bbox: BBox, wp: Vector3): bool =
+    f.min.x < bbox.maxPoint.x + wp.x and bbox.minPoint.x + wp.x < f.max.x and
+        f.min.y < bbox.maxPoint.y + wp.y and bbox.minPoint.y + wp.y < f.max.y
 
 method beforeDraw*(tm: TileMap, index: int): bool =
     result = true # Prevent child nodes from drawing. We shall draw them.
     if tm.drawingRows.len == 0: return
 
+    tm.mRowRebuildingDelayedToDraw = false
     tm.rebuildAllRowsIfNeeded()
 
     let c = currentContext()
@@ -538,20 +547,16 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
                             const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
 
-                            if isOrtho or frustum.intersectFrustum(row.bbox):
+                            if isOrtho or frustum.intersectFrustum(row.bbox, layer.node.worldPos()):
                                 gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
                                 gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
 
                                 gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
 
-                        let objectStartIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer]
-                        let objectEndIndex = tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]
-                        let numObjects = objectEndIndex - objectStartIndex
 
-                        if numObjects != 0:
+                        for iObj in tm.drawingRows[i].objectLayerBreaks[iTileLayer] ..< tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]:
                             vboStateValid = false
-                            for iObj in objectStartIndex ..< objectEndIndex:
-                                tm.drawingRows[i].objects[iObj].recursiveDraw()
+                            tm.drawingRows[i].objects[iObj].recursiveDraw()
                     inc iTileLayer
 
             elif layer of ImageMapLayer:
@@ -788,29 +793,44 @@ proc rebuildRow(tm: TileMap, row: int) =
     tm.rebuildRow(tm.drawingRows[row], row)
 
 proc packAllTilesToSheet(tm: TileMap) =
+    let ct = epochTime()
     tm.tileVCoords = initTable[int16, array[16, float32]]()
     var allImages = newSeq[TidAndImage]()
     for ts in tm.tileSets:
         ts.getAllImages(allImages)
 
-    const maxWidth = 800
-    const maxHeight = 500
+    let c = currentContext()
+    let gl = c.gl
+    var maxTextureSize = min(gl.getParami(gl.MAX_TEXTURE_SIZE), 16384)
 
-    allImages.keepItIf:
-        let sz = it.image.size
-        sz.width < maxWidth and sz.height < maxHeight
+    var tmaxWidth = 0.0
+    var tmaxHeight = 0.0
+    var totalPixels = 0
+    for i in allImages:
+        tmaxWidth = max(tmaxWidth, i.image.size.width)
+        tmaxHeight = max(tmaxHeight, i.image.size.height)
+        totalPixels += (i.image.size.width * i.image.size.height).int
+
+    if totalPixels div maxTextureSize < maxTextureSize:
+        info "posible can handle all images ", totalPixels div maxTextureSize
+    else:
+        info "skip some images ", totalPixels div maxTextureSize
+
+        const maxTileSize = 1000
+
+        allImages.keepItIf:
+            let sz = it.image.size
+            sz.width < maxTileSize and sz.height < maxTileSize
+
+    info "max tile size ", tmaxWidth, " ", tmaxHeight
 
     allImages.sort() do(i1, i2: TidAndImage) -> int:
         let sz2 = i1.image.size
         let sz1 = i2.image.size
         cmp(sz1.width * sz1.height, sz2.width * sz2.height)
 
-    let c = currentContext()
-    let gl = c.gl
-
-    var maxTextureSize = gl.getParami(gl.MAX_TEXTURE_SIZE)
-    let texWidth = min(2048, maxTextureSize)
-    let texHeight = min(2048, maxTextureSize)
+    let texWidth = maxTextureSize
+    let texHeight = maxTextureSize
 
     info "[TileMap::packAllTilesToSheet] maxTextureSize ", maxTextureSize
 
@@ -824,11 +844,14 @@ proc packAllTilesToSheet(tm: TileMap) =
     gl.blendFunc(gl.ONE, gl.ZERO)
     c.withTransform ortho(0, texWidth.Coord, 0, texHeight.Coord, -1, 1):
         var rp = newPacker(texWidth.int32, texHeight.int32)
+        var coords: array[16, float32]
+        var subimageCoords: array[4, float32]
+        var fromRect: Rect
+        var r: Rect
         for i in allImages:
             #echo "Packing image: ", i.image.filePath
-            let img = i.image
-            let logicalSize = img.size
-            let sz = img.backingSize()
+            let logicalSize = i.image.size
+            let sz = i.image.backingSize()
 
             assert(sz.width > 2)
             assert(sz.height > 2)
@@ -842,7 +865,6 @@ proc packAllTilesToSheet(tm: TileMap) =
             if p.hasSpace:
                 #echo "pos: ", p
 
-                var r: Rect
                 r.origin.x = Coord(p.x) # Coord(p.x + margin)
                 r.origin.y = Coord(p.y) # Coord(p.y + margin)
                 r.size = sz
@@ -854,13 +876,12 @@ proc packAllTilesToSheet(tm: TileMap) =
                 # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
                 # gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
 
-                var fromRect: Rect
                 fromRect.size = logicalSize
                 fromRect.size.width += srcLogicalMarginX * 2
                 fromRect.size.height += srcLogicalMarginY * 2
                 fromRect.origin.x = - srcLogicalMarginX
                 fromRect.origin.y = - srcLogicalMarginY
-                c.drawImage(img, r, fromRect)
+                c.drawImage(i.image, r, fromRect)
 
                 r.origin.x += margin
                 r.origin.y += margin
@@ -868,13 +889,11 @@ proc packAllTilesToSheet(tm: TileMap) =
                 r.size.width -= margin * 2
                 r.size.height -= margin * 2
 
-
                 let yOff = tm.tileSize.y - logicalSize.height
 
                 const dv = 0 #-1.0
                 const d = 0.0 #1.0
 
-                var coords: array[16, float32]
                 coords[0] = dv
                 coords[1] = dv + yOff
                 coords[2] = (r.x.Coord + d) / texWidth.Coord
@@ -896,7 +915,6 @@ proc packAllTilesToSheet(tm: TileMap) =
                 coords[15] = (r.y + d) / texHeight.Coord
                 tm.tileVCoords[i.tid] = coords
 
-                var subimageCoords: array[4, float32]
                 subimageCoords[0] = coords[2]
                 subimageCoords[1] = coords[3]
                 subimageCoords[2] = coords[10]
@@ -908,17 +926,22 @@ proc packAllTilesToSheet(tm: TileMap) =
                 warn "pack ", i.image.filePath, " doesnt fit ", i.image.size
 
     endDraw(tm.mTilesSpriteSheet, gfs)
-    tm.mTilesSpriteSheet.generateMipmap(c.gl)
-
+    # tm.mTilesSpriteSheet.generateMipmap(c.gl)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    info "packTilesDone ", epochTime() - ct
 
+var rowRebCall = 0
 proc rebuildAllRows(tm: TileMap) =
+    # let ct = epochTime()
     let numRows = tm.mapSize.height.int * (if tm.mOrientation == TileMapOrientation.orthogonal: 1 else: 2)
-    # echo " num rows, ", numRows, " height ", tm.mapSize.height
+    inc rowRebCall
     for i in 0 ..< numRows:
         tm.rebuildRow(i)
+    # echo "Done: ",epochTime() - ct, " call ", rowRebCall, " num rows, ", numRows, " height ", tm.mapSize.height
 
 proc rebuildAllRowsIfNeeded(tm: TileMap) =
+    if tm.mRowRebuildingDelayedToDraw: return
+
     var enabledLayers = newBoolSeq()
     enabledLayers.setLen(tm.layers.len)
     for i, layer in tm.layers:
@@ -934,7 +957,7 @@ proc removeLayer(tm: TileMap, idx: int, name: string) =
         tm.layers.delete(idx)
         layer.node.removeFromParent()
 
-        if tm.drawingRows.len > 0:
+        if tm.drawingRows.len > 0 and not tm.mRowRebuildingDelayedToDraw:
             tm.rebuildAllRows()
 
 proc removeLayer*(tm: TileMap, name: string)=
@@ -944,6 +967,7 @@ proc removeLayer*(tm: TileMap, name: string)=
             return
 
 proc itemsForPropertyName*[T](tm: TileMap, key: string): seq[tuple[obj: T, property: JsonNode]]=
+    let ct = epochTime()
     result = @[]
     when T is TileMapLayer | ImageMapLayer | BaseTileMapLayer:
         for lay in tm.layers:

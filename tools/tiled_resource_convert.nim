@@ -1,15 +1,15 @@
 import json, os, tables, strutils, logging
 
-import rod.node
-import rod.component
-import rod.tools.serializer
-import rod.rod_types
-import rod.utils.json_serializer
+import rod/node
+import rod/component
+import rod/tools.serializer
+import rod/rod_types
+import rod/utils/json_serializer
 
-import nimx.matrixes
-import nimx.types
-import nimx.image
-import tilemap.tile_map
+import nimx/matrixes
+import nimx/types
+import nimx/image
+import tilemap/tile_map
 import hashes
 
 proc parseTileMap(tm: TileMap, jtm: JsonNode)
