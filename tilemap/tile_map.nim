@@ -801,7 +801,7 @@ proc packAllTilesToSheet(tm: TileMap) =
 
     let c = currentContext()
     let gl = c.gl
-    var maxTextureSize = min(gl.getParami(gl.MAX_TEXTURE_SIZE), 8192)
+    var maxTextureSize = min(gl.getParami(gl.MAX_TEXTURE_SIZE), 4096)
 
     var tmaxWidth = 0.0
     var tmaxHeight = 0.0
