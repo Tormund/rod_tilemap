@@ -838,8 +838,10 @@ proc packAllTilesToSheet(tm: TileMap) =
 
     tm.mTilesSpriteSheet = imageWithSize(newSize(texWidth.Coord, texHeight.Coord))
 
+    let renderTarget = newImageRenderTarget()
+    renderTarget.setImage(tm.mTilesSpriteSheet)
     var gfs: GlFrameState
-    beginDraw(tm.mTilesSpriteSheet, gfs)
+    beginDraw(renderTarget, gfs)
 
     gl.blendFunc(gl.ONE, gl.ZERO)
     c.withTransform ortho(0, texWidth.Coord, 0, texHeight.Coord, -1, 1):
@@ -925,7 +927,8 @@ proc packAllTilesToSheet(tm: TileMap) =
             else:
                 warn "pack ", i.image.filePath, " doesnt fit ", i.image.size
 
-    endDraw(tm.mTilesSpriteSheet, gfs)
+    endDraw(renderTarget, gfs)
+    renderTarget.dispose()
     # tm.mTilesSpriteSheet.generateMipmap(c.gl)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     info "packTilesDone ", epochTime() - ct
