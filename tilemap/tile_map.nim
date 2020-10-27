@@ -840,7 +840,7 @@ proc packAllTilesToSheet(tm: TileMap) =
 
     let renderTarget = newImageRenderTarget()
     renderTarget.setImage(tm.mTilesSpriteSheet)
-    var gfs: GlFrameState
+    var gfs: RTIContext
     beginDraw(renderTarget, gfs)
 
     gl.blendFunc(gl.ONE, gl.ZERO)
