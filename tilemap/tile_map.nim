@@ -20,7 +20,7 @@ type
 
     Properties* = TableRef[string, JsonNode]
 
-    BaseTileMapLayer* = ref object of Component
+    BaseTileMapLayer* = ref object of RenderComponent
         size*: Size
         offset*: Size
         actualSize*: LayerRange
@@ -76,7 +76,7 @@ type
         renderTime: float
         postEffectCalls: int
 
-    TileMap* = ref object of Component
+    TileMap* = ref object of RenderComponent
         mapSize*: Size
         tileSize*: Vector3
         layers*: seq[BaseTileMapLayer]
@@ -406,7 +406,8 @@ proc maxVector(a,b:Vector3):Vector3=
 proc getBBox(n: Node): BBox =
     var index = 0
     # get start point
-    for i, comp in n.components:
+    let components = toSeq(n.components)
+    for i, comp in components:
         let bb = comp.getBBox()
 
         if bb.hasDimension():
@@ -415,8 +416,8 @@ proc getBBox(n: Node): BBox =
             index = i + 1
             break
 
-    while index < n.components.len:
-        let comp = n.components[index]
+    while index < components.len:
+        let comp = components[index]
         index.inc()
 
         let bb = comp.getBBox()
