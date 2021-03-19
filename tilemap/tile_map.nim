@@ -6,7 +6,7 @@ from rod/utils/property_desc import nil
 
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, render_to_image, composition ]
 
-import json, tables, strutils, logging, sequtils, algorithm, math
+import json, tables, strutils, logging, sequtils, algorithm, math, tables
 import nimx.assets.asset_loading
 import boolseq
 import rect_packer
@@ -30,6 +30,7 @@ type
     TileMapLayer* = ref object of BaseTileMapLayer
         data*: seq[int16]
         tileSize*: Vector3
+        drawingData*: DrawingTileLayerData
 
     ImageMapLayer* = ref object of BaseTileMapLayer
         image*: Image
@@ -60,6 +61,10 @@ type
         staggeredX
         staggeredY
         hexagonal
+
+    DrawingTileLayerData = object
+        rows: seq[int]
+        breaks: seq[int]
 
     DrawingRow = object
         vertexBuffer: BufferRef
@@ -524,69 +529,92 @@ method beforeDraw*(tm: TileMap, index: int): bool =
     let frustum = tm.node.sceneView.camera.getFrustum()
     let isOrtho = tm.mOrientation == TileMapOrientation.orthogonal
 
+    const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
+    # var rows = 0
+    # var skips = 0
+    # var layers = 0
+    # var rowsss: seq[tuple[name:string, rows:int]]
+    # var elemets: seq[tuple[name:string, draws:int, breaks: int]]
     for layer in tm.layers:
-        if layer.node.enabled:
-            if layer of TileMapLayer:
-                c.withTransform(vpm * layer.node.worldTransform):
-                    if vboStateValid:
-                        gl.uniformMatrix4fv(gl.getUniformLocation(tm.program, "uModelViewProjectionMatrix"), false, c.transform)
-                        gl.uniform1f(gl.getUniformLocation(tm.program, "uAlpha"), layer.node.alpha)
+        if not layer.node.enabled: continue
+        if layer of TileMapLayer:
+            # inc layers
+            let tml = layer.TileMapLayer
+            c.withTransform(vpm * layer.node.worldTransform):
+                if vboStateValid:
+                    gl.uniformMatrix4fv(gl.getUniformLocation(tm.program, "uModelViewProjectionMatrix"), false, c.transform)
+                    gl.uniform1f(gl.getUniformLocation(tm.program, "uAlpha"), layer.node.alpha)
 
-                    for i in 0 ..< tm.drawingRows.len:
-                        assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
-                        # echo "Drawing row: ", i #, ", quads: ", tm.drawingRows[i].numberOfQuads
+                # rows += tm.drawingRows.len
 
-                        let quadStartIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer]
-                        let quadEndIndex = tm.drawingRows[i].vboLayerBreaks[iTileLayer + 1]
-                        let numQuads = quadEndIndex - quadStartIndex
-                        let row = tm.drawingRows[i]
+                # rowsss.add((layer.name, tm.drawingRows.len))
 
-                        if numQuads != 0:
-                            if not vboStateValid:
-                                tm.prepareVBOs()
-                                vboStateValid = true
+                let wp = layer.node.worldPos()
+                var draws = 0
+                var breaks = 0
+                for i in tml.drawingData.rows:
+                # for i in 0 ..< tm.drawingRows.len:
+                    # inc rows
+                    assert(tm.drawingRows[i].vertexBuffer != invalidBuffer)
+                    # echo "Drawing row: ", i #, ", quads: ", tm.drawingRows[i].numberOfQuads
 
-                            const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
+                    template quadStartIndex():int = tm.drawingRows[i].vboLayerBreaks[iTileLayer]
+                    template quadEndIndex():int = tm.drawingRows[i].vboLayerBreaks[iTileLayer + 1]
+                    template numQuads():int = quadEndIndex() - quadStartIndex()
+                    if numQuads == 0: continue
+                    if not vboStateValid:
+                        tm.prepareVBOs()
+                        vboStateValid = true
 
-                            if isOrtho or frustum.intersectFrustum(row.bbox, layer.node.worldPos()):
-                                gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
-                                gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
+                    if frustum.intersectFrustum(tm.drawingRows[i].bbox, wp):
+                        gl.bindBuffer(gl.ARRAY_BUFFER, tm.drawingRows[i].vertexBuffer)
+                        gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, quadStartIndex * floatsPerQuad * sizeof(float32))
+                        gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
+                        # draws += numQuads
+                    # else:
+                        # inc skips
 
-                                gl.drawElements(gl.TRIANGLES, GLsizei(numQuads * 6), gl.UNSIGNED_SHORT)
+                    for iObj in tm.drawingRows[i].objectLayerBreaks[iTileLayer] ..< tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]:
+                        vboStateValid = false
+                        tm.drawingRows[i].objects[iObj].recursiveDraw()
+                        # inc breaks
 
+                # elemets.add((layer.name, draws, breaks))
 
-                        for iObj in tm.drawingRows[i].objectLayerBreaks[iTileLayer] ..< tm.drawingRows[i].objectLayerBreaks[iTileLayer + 1]:
-                            vboStateValid = false
-                            tm.drawingRows[i].objects[iObj].recursiveDraw()
-                    inc iTileLayer
+                inc iTileLayer
 
-            elif layer of ImageMapLayer:
-                let iml = ImageMapLayer(layer)
-                if not iml.image.isNil:
-                    vboStateValid = false
-                    var r: Rect
-                    r.size = iml.image.size
-                    c.withTransform(vpm * layer.node.worldTransform):
-                        c.drawImage(iml.image, r, alpha = iml.node.alpha)
-
-            elif layer of NodeMapLayer:
+        elif layer of ImageMapLayer:
+            let iml = ImageMapLayer(layer)
+            if not iml.image.isNil:
                 vboStateValid = false
-                var rTime = cpuTime()
-                let impl = NodeMapLayer(layer)
+                var r: Rect
+                r.size = iml.image.size
+                c.withTransform(vpm * layer.node.worldTransform):
+                    c.drawImage(iml.image, r, alpha = iml.node.alpha)
 
-                let bb = impl.getBBox()
-                if isOrtho or frustum.intersectFrustum(bb):
-                    impl.node.recursiveDraw()
+        elif layer of NodeMapLayer:
+            vboStateValid = false
+            var rTime = cpuTime()
+            let impl = NodeMapLayer(layer)
 
-                if tm.debugMaxNodes != 0:
-                    var dd: DebugRenderData
-                    dd.renderTime = cpuTime() - rTime
-                    dd.rect = newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y)
-                    dd.text = impl.node.name
-                    dd.nodeCount = impl.getNodeCount()
-                    tm.debugObjects.add(dd)
+            let bb = impl.getBBox()
+            if frustum.intersectFrustum(bb):
+                impl.node.recursiveDraw()
 
+            if tm.debugMaxNodes != 0:
+                var dd: DebugRenderData
+                dd.renderTime = cpuTime() - rTime
+                dd.rect = newRect(bb.minPoint.x - tm.node.positionX, bb.minPoint.y - tm.node.positionY, bb.maxPoint.x - bb.minPoint.x, bb.maxPoint.y - bb.minPoint.y)
+                dd.text = impl.node.name
+                dd.nodeCount = impl.getNodeCount()
+                tm.debugObjects.add(dd)
 
+    # echo "rows ", rows#, " skips ", skips, " layers ", layers
+    # rowsss.sort() do(v1,v2: tuple[name: string, rows:int]) -> int: cmp(v1.rows, v2.rows)
+    # elemets.sort() do(v1,v2: tuple[name:string, draws:int, breaks: int]) -> int: cmp(v1.draws, v2.draws)
+
+    # echo "rows ", rowsss
+    # echo "*****************\nelements ", elemets
     if tm.debugMaxNodes != 0:
         for i, dd in tm.debugObjects:
             var p = dd.renderTime * 1000.0 / tm.debugMaxNodes.float
@@ -721,10 +749,7 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
         let quadsInRowSoFar = vertexData.len div 16
         row.vboLayerBreaks.add(quadsInRowSoFar)
         if quadsInRowSoFar > 0:
-            let quadsInRun = row.vboLayerBreaks[^1] - row.vboLayerBreaks[^2]
-            if quadsInRun > tm.maxQuadsInRun:
-                tm.maxQuadsInRun = quadsInRun
-
+            tm.maxQuadsInRun = max(row.vboLayerBreaks[^1] - row.vboLayerBreaks[^2], tm.maxQuadsInRun)
         let objectsInRowSoFar = row.objects.len
         row.objectLayerBreaks.add(objectsInRowSoFar)
 
@@ -782,6 +807,10 @@ proc rebuildRow(tm: TileMap, row: var DrawingRow, index: int) =
                     else:
                         i += 2
 
+                let quadsInRowSoFar = vertexData.len div 16
+                if quadsInRowSoFar - row.vboLayerBreaks[^1] > 0:
+                    tml.drawingData.rows.add(index)
+
     row.bbox.minPoint = newVector3(x_min, y_min + minOffset, 0.0)
     row.bbox.maxPoint = newVector3(x_max, y_max + maxOffset, 0.0)
 
@@ -815,13 +844,15 @@ proc packAllTilesToSheet(tm: TileMap) =
     if totalPixels div maxTextureSize < maxTextureSize:
         info "posible can handle all images ", totalPixels div maxTextureSize
     else:
-        info "skip some images ", totalPixels div maxTextureSize
-
         const maxTileSize = 1000
-
-        allImages.keepItIf:
+        var skiped = 0
+        allImages.keepIf() do(it: TidAndImage) -> bool:
             let sz = it.image.size
-            sz.width < maxTileSize and sz.height < maxTileSize
+            result = sz.width < maxTileSize and sz.height < maxTileSize
+            if not result:
+                skiped.inc()
+
+        info "skip ", skiped ," images ", totalPixels div maxTextureSize
 
     info "max tile size ", tmaxWidth, " ", tmaxHeight
 
@@ -939,6 +970,9 @@ proc rebuildAllRows(tm: TileMap) =
     # let ct = epochTime()
     let numRows = tm.mapSize.height.int * (if tm.mOrientation == TileMapOrientation.orthogonal: 1 else: 2)
     inc rowRebCall
+    for l in tm.layers:
+        if l of TileMapLayer:
+            l.TileMapLayer.drawingData = DrawingTileLayerData()
     for i in 0 ..< numRows:
         tm.rebuildRow(i)
     # echo "Done: ",epochTime() - ct, " call ", rowRebCall, " num rows, ", numRows, " height ", tm.mapSize.height
