@@ -6,7 +6,7 @@ from rod/utils/property_desc import nil
 
 import nimx / [ types, property_visitor, matrixes, portable_gl, context, image, render_to_image, composition ]
 
-import json, tables, strutils, logging, sequtils, algorithm, math, tables
+import json, tables, strutils, logging, sequtils, algorithm, math
 import nimx.assets.asset_loading
 import boolseq
 import rect_packer
@@ -91,9 +91,7 @@ type
         mOrientation*: TileMapOrientation
         isStaggerIndexOdd*: bool
         properties*: Properties
-        # tileDrawRect: proc(tm: TileMap, pos: int, tr: var Rect)
         drawing: DrawingMapData
-        # mQuadIndexBuffer: BufferRef
         mProgram: ProgramRef
         mTilesSpriteSheet: SelfContainedImage
         enabledLayers: BoolSeq
@@ -506,11 +504,6 @@ method beforeDraw*(tm: TileMap, index: int): bool =
     let isOrtho = tm.mOrientation == TileMapOrientation.orthogonal
 
     const floatsPerQuad = 16 # Single quad occupies 16 floats in vertex buffer
-
-    var draws = 0
-    var drawsCalls = 0
-    var maxBreaks = 0
-    var totalBreaks = 0
     var vboStateValid = false
     for layer in tm.layers:
         if not layer.node.enabled: continue
@@ -530,16 +523,11 @@ method beforeDraw*(tm: TileMap, index: int): bool =
 
                     gl.vertexAttribPointer(saPosition.GLuint, 4, gl.FLOAT, false, 0, index * floatsPerQuad * sizeof(float32))
                     gl.drawElements(gl.TRIANGLES, GLsizei(amount * 6), gl.UNSIGNED_SHORT)
-                    draws += amount
-                    inc drawsCalls
 
                 if tml.drawingData.breaks.len == 0:
                     drawChunk(tml.drawingData.quadsStart, tml.drawingData.quadsEnd - tml.drawingData.quadsStart)
                 else:
                     var index = tml.drawingData.quadsStart
-                    maxBreaks = max(maxBreaks, tml.drawingData.breaks.len)
-                    totalBreaks += tml.drawingData.breaks.len
-                    # echo "breaks ", tml.drawingData.breaks.len, " from ", tml.drawingData.breaks[0].index
                     for b in tml.drawingData.breaks:
                         if b.index - index > 0:
                             drawChunk(index, b.index - index)
@@ -576,7 +564,6 @@ method beforeDraw*(tm: TileMap, index: int): bool =
                 dd.nodeCount = impl.getNodeCount()
                 tm.debugObjects.add(dd)
 
-    # echo "drawCalls ", drawsCalls, " elems ", draws, " breaks ", totalBreaks, " maxBreaks ", maxBreaks
     if tm.debugMaxNodes != 0:
         for i, dd in tm.debugObjects:
             var p = dd.renderTime * 1000.0 / tm.debugMaxNodes.float
