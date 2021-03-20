@@ -703,15 +703,32 @@ proc rebuildLayers(tm: TileMap) =
         template breakIndx(): int = vertexData.len div 16
         tml.drawingData.quadsStart = breakIndx()
 
-        for index, tid in tml.data:
-            var (x, y) = tml.tileXYAtIndex(index)
-            let odd = if staggered: y mod 2 else: y
-            let p = tm.positionAtTileXY(x, y)
+        template pushTile(tid: int16, p: Vector3) =
             if not tm.addTileToVertexData(tid, p.x, p.y, vertexData):
                 let n = tm.createObjectForTile(tid, p.x, p.y)
                 if not n.isNil:
                     layer.node.addChild(n)
                     tml.drawingData.breaks.add((breakIndx(), n))
+
+        let h = tml.actualSize.maxY - tml.actualSize.minY
+        let w = tml.actualSize.maxX - tml.actualSize.minx
+        let ss = tml.actualSize.minY * int(tm.mapSize.width) + tml.actualSize.minx
+        let oddx = (if staggered: ss mod 2 else: 0) == 1
+        for my in 0 ..< h:
+            var mx = int(oddx)
+            while mx < w:
+                let index = my * w + mx
+                let tid = tml.data[index]
+                let (x, y) = tml.tileXYAtIndex(index)
+                pushTile(tid, tm.positionAtTileXY(x, y))
+                mx += 2
+            mx = int(not oddx)
+            while mx < w:
+                let index = my * w + mx
+                let tid = tml.data[index]
+                let (x, y) = tml.tileXYAtIndex(index)
+                pushTile(tid, tm.positionAtTileXY(x, y))
+                mx += 2
 
         tml.drawingData.quadsEnd = breakIndx()
     tm.updateWithVertexData(vertexData)
