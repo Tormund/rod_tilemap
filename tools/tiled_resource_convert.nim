@@ -20,6 +20,7 @@ proc convertInRodAsset*(inPath: string, outPath: string)=
     var node = newNode(tmpSplit.name)
     var tm = node.component(TileMap)
     var jss = newJsonSerializer()
+    jss.url = "file://" & outPath
 
     tm.parseTileMap(raw)
     node.serialize(jss)
@@ -45,10 +46,10 @@ when rawParsingBlock:
         var dataSize = (tm.mapSize.width * tm.mapSize.height).int
         if "actualSize" in jl:
             let acts = jl["actualSize"]
-            layer.actualSize.minx = acts["minX"].getNum().int32
-            layer.actualSize.maxx = acts["maxX"].getNum().int32
-            layer.actualSize.miny = acts["minY"].getNum().int32
-            layer.actualSize.maxy = acts["maxY"].getNum().int32
+            layer.actualSize.minx = acts["minX"].getInt().int32
+            layer.actualSize.maxx = acts["maxX"].getInt().int32
+            layer.actualSize.miny = acts["minY"].getInt().int32
+            layer.actualSize.maxy = acts["maxY"].getInt().int32
 
             dataSize = (layer.actualSize.maxx - layer.actualSize.minx) * (layer.actualSize.maxy - layer.actualSize.miny)
 
@@ -62,7 +63,7 @@ when rawParsingBlock:
 
         var i = 0
         for jld in jl["data"]:
-            layer.data[i] = jld.getNum().int16
+            layer.data[i] = jld.getInt().int16
             inc i
 
         result = layer
@@ -112,11 +113,11 @@ when rawParsingBlock:
                     tm.isStaggerIndexOdd = jtm["staggerindex"].getStr() == "odd"
 
         if "width" in jtm and "height" in jtm:
-            tm.mapSize = newSize(jtm["width"].getFNum(), jtm["height"].getFNum())
+            tm.mapSize = newSize(jtm["width"].getFloat(), jtm["height"].getFloat())
 
         if "tileheight" in jtm and "tilewidth" in jtm:
-            let tWidth = jtm["tilewidth"].getNum().float
-            let tHeigth = jtm["tileheight"].getNum().float
+            let tWidth = jtm["tilewidth"].getFloat()
+            let tHeigth = jtm["tileheight"].getFloat()
             tm.tileSize = newVector3(tWidth, tHeigth)
 
         if "layers" in jtm:
@@ -128,13 +129,13 @@ when rawParsingBlock:
 
                 var position = newVector3()
                 if "offsetx" in jl:
-                    position.x = jl["offsetx"].getFNum()
+                    position.x = jl["offsetx"].getFloat()
                 if "offsety" in jl:
-                    position.y = jl["offsety"].getFNum()
+                    position.y = jl["offsety"].getFloat()
 
                 position += pos
 
-                let enabled = if visible: jl["visible"].getBVal() else: false
+                let enabled = if visible: jl["visible"].getBool() else: false
 
                 var layProps = getProperties(jl)
 
@@ -165,12 +166,12 @@ when rawParsingBlock:
                                 layer.properties[k] = v
 
 
-                let alpha = jl["opacity"].getFNum()
+                let alpha = jl["opacity"].getFloat()
 
                 if "width" notin jl or "height" notin jl:
                     layer.size = zeroSize
                 else:
-                    layer.size = newSize(jl["width"].getFNum(), jl["height"].getFNum())
+                    layer.size = newSize(jl["width"].getFloat(), jl["height"].getFloat())
 
                 layer.offset = newSize(position.x, position.y)
 
@@ -201,7 +202,7 @@ when rawParsingBlock:
                     var img = new(SelfContainedImage)
                     img.setFilePath(jts["image"].str)
                     sts.sheet = img
-                    sts.columns = jts["columns"].getNum().int
+                    sts.columns = jts["columns"].getInt().int
                     ts = sts
                 else:
                     var cts = new(TileCollection)
@@ -212,7 +213,7 @@ when rawParsingBlock:
                         img.setFilePath(v["image"].str)
                         if id >= cts.collection.len:
                             cts.collection.setLen(id + 1)
-                        cts.collection[id] = (image: img, properties: getTileProperties(jts, id), gid: id) #actualy we don't need valid global id here
+                        cts.collection[id] = Tile(image: img, properties: getTileProperties(jts, id), gid: id) #actualy we don't need valid global id here
                     ts = cts
 
                 var tilesetProps = jts.getProperties()
@@ -220,13 +221,13 @@ when rawParsingBlock:
                     ts.properties = tilesetProps
 
                 if "firstgid" in jts:
-                    ts.firstgid = jts["firstgid"].getNum().int32
+                    ts.firstgid = jts["firstgid"].getInt().int32
                 if "tilecount" in jts:
-                    ts.tilesCount = jts["tilecount"].getNum().int32
+                    ts.tilesCount = jts["tilecount"].getInt().int32
                 if "name" in jts:
                     ts.name = jts["name"].str
                 if "tilewidth" in jts:
-                    ts.tileSize = newVector3(jts["tilewidth"].getFNum(), jts["tileheight"].getFNum())
+                    ts.tileSize = newVector3(jts["tilewidth"].getFloat(), jts["tileheight"].getFloat())
 
                 tm.tileSets.add(ts)
 

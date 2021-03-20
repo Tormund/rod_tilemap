@@ -6,7 +6,7 @@ import ospaths, os, parseopt2
 
 var destinationPath: string
 const imageLayersPath = "layers"
-const tilesetsPath = "../tiles"
+const tilesetsPath = "tiles"
 
 var usedGids = newCountTable[int]()
 var unusedTiles = newSeq[string]()
@@ -33,12 +33,14 @@ proc moveImageFile(jstr: JsonNode, k: string, pathTo: string) =
     let spFile = splitFile(path)
 
     var jPath = pathTo & '/' & spFile.name & spFile.ext
-    let copyTo = destinationPath & '/' & jPath
+    var copyTo = destinationPath & '/' & jPath
 
-    jstr[k] = %jPath
+    copyTo.normalizePath()
+
+    jstr[k] = %copyTo
 
     createDir(splitFile(copyTo).dir)
-    # echo "COPY FILE: IMAGE: ", path, " to ", copyTo
+    echo "COPY FILE: IMAGE: ", path, " to ", copyTo, " jpath ", jPath
     copyFile(path, copyTo)
 
 proc moveTileFile(jstr: JsonNode, k: string, pathFrom: string = "", pathTo: string = "", integrated: bool) =
@@ -57,13 +59,15 @@ proc moveTileFile(jstr: JsonNode, k: string, pathFrom: string = "", pathTo: stri
     else:
         copyTo &= tilesetsPath & '/' & jPath
 
-    jstr[k] = %jPath
+    copyTo.normalizePath()
+
+    jstr[k] = %copyTo
 
     if pathFrom.len > 0:
         path = pathFrom & '/' & path
 
     createDir(splitFile(copyTo).dir)
-    # echo "COPY FILE: TILE: ", path, " to ", copyTo
+    echo "COPY FILE: TILE: ", path, " to ", copyTo
     copyFile(path, copyTo)
 
 # proc moveTilesetFile(jstr: JsonNode, k: string)=
@@ -178,7 +182,7 @@ proc readTileSet(jn: JsonNode, firstgid: int, pathFrom: string = "")=
                         propOwner.add(%cp.ownerName)
                         propNames.add(%cp.key)
                         propValues.add(%cp.val)
-                    echo ""
+                    # echo ""
 
             jn.delete("tilepropertytypes")
             jn.delete("tileproperties")
@@ -200,7 +204,7 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
     for layer in nodeLayers.mitems():
         if "properties" in layer:
             if "tiledonly" in layer["properties"]:
-                if layer["properties"]["tiledonly"].getBVal():
+                if layer["properties"]["tiledonly"].getBool():
                     continue
             else:
                 layer.writeProperties(extractProperties(layer, cpoLayer, layer["name"].str))
@@ -276,8 +280,8 @@ proc prepareLayers(jNode: var JsonNode, width, height: int) =
 proc readTiledFile(path: string): string =
     let tmpSplit = path.splitFile()
     var jTiled = parseFile(path)
-    var width = jTiled["width"].getNum().int
-    var height = jTiled["height"].getNum().int
+    var width = jTiled["width"].getInt()
+    var height = jTiled["height"].getInt()
 
     if "layers" in jTiled:
         prepareLayers(jTiled, width, height)
@@ -344,7 +348,10 @@ proc main()=
             echo "\n\n Running in safeMode !!\n\n"
 
         let outFile =  readTiledFile(inFileName)
+        echo "tiled_resource_collected inFileName ", inFileName, " destinationPath ", destinationPath
+        echo "converting in rod format"
         convertInRodAsset(outFile, outFile)
+        echo "convertation done"
 
         # echo "\n\n usedGids "
         # for k, v in usedGids:
