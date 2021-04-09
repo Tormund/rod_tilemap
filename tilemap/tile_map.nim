@@ -359,74 +359,6 @@ proc layerIntersectsAtPositionWithPropertyName*(tm: TileMap, position: Vector3, 
             #         result.add(l)
 
 # =================== BBox logic ==================
-proc hasDimension*(bb: BBox): bool =
-    let diff = bb.maxPoint - bb.minPoint
-    if abs(diff.x) > 0 or abs(diff.y) > 0:
-        return true
-
-proc minVector(a,b: Vector3):Vector3=
-    result = newVector3(min(a.x, b.x), min(a.y, b.y), min(a.z, b.z))
-
-proc maxVector(a,b:Vector3):Vector3=
-    result = newVector3(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z))
-
-proc getBBox(n: Node): BBox =
-    var index = 0
-    # get start point
-    let components = toSeq(n.components)
-    for i, comp in components:
-        let bb = comp.getBBox()
-
-        if bb.hasDimension():
-            result.minPoint = bb.minPoint
-            result.maxPoint = bb.maxPoint
-            index = i + 1
-            break
-
-    while index < components.len:
-        let comp = components[index]
-        index.inc()
-
-        let bb = comp.getBBox()
-        if bb.hasDimension():
-            result.minPoint = minVector(result.minPoint, bb.minPoint)
-            result.maxPoint = maxVector(result.maxPoint, bb.maxPoint)
-
-proc nodeBounds2d(n: Node, minP: var Vector3, maxP: var Vector3) =
-    let wrldMat = n.worldTransform()
-    var wp0, wp1, wp2, wp3: Vector3
-
-    let bb = n.getBBox()
-    if bb.hasDimension:
-        wp0 = wrldMat * bb.minPoint
-        wp1 = wrldMat * newVector3(bb.minPoint.x, bb.maxPoint.y, 0.0)
-        wp2 = wrldMat * bb.maxPoint
-        wp3 = wrldMat * newVector3(bb.maxPoint.x, bb.minPoint.y, 0.0)
-
-        minP = minVector(minP, wp0)
-        minP = minVector(minP, wp1)
-        minP = minVector(minP, wp2)
-        minP = minVector(minP, wp3)
-
-        maxP = maxVector(maxP, wp0)
-        maxP = maxVector(maxP, wp1)
-        maxP = maxVector(maxP, wp2)
-        maxP = maxVector(maxP, wp3)
-
-    for ch in n.children:
-        ch.nodeBounds2d(minP, maxP)
-
-const absMinPoint = newVector3(high(int).Coord, high(int).Coord, high(int).Coord)
-const absMaxPoint = newVector3(low(int).Coord, low(int).Coord, low(int).Coord)
-
-proc nodeBounds(n: Node): BBox=
-    var minP = absMinPoint
-    var maxP = absMaxPoint
-    n.nodeBounds2d(minP, maxP)
-    if minP != absMinPoint and maxP != absMaxPoint:
-        result.minPoint = minP
-        result.maxPoint = maxP
-
 proc getBBox(ml: NodeMapLayer): BBox =
     if not ml.isBBoxCalculated:
         ml.bbox = ml.node.nodeBounds()
@@ -460,9 +392,6 @@ proc greenTored(p: float32): Color =
 proc setDebugMaxNodes*(tm: TileMap, count: int) =
     tm.debugMaxNodes = count
     tm.debugObjects.setLen(0)
-
-template intersectFrustum*(f: Frustum, bbox: BBox): bool =
-    f.min.x < bbox.maxPoint.x and bbox.minPoint.x < f.max.x and f.min.y < bbox.maxPoint.y and bbox.minPoint.y < f.max.y
 
 proc program(tm: TileMap): ProgramRef =
     if tm.mProgram == invalidProgram:
@@ -553,7 +482,7 @@ method beforeDraw*(tm: TileMap, index: int): bool =
             let impl = NodeMapLayer(layer)
 
             let bb = impl.getBBox()
-            if frustum.intersectFrustum(bb):
+            if frustum.intersect(bb):
                 impl.node.recursiveDraw()
 
             if tm.debugMaxNodes != 0:
